@@ -1,0 +1,19 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+rust-version = "1.94"
+license = "Apache-2.0"
+repository = "https://github.com/agentstatelabs/oxtel"
+homepage = "https://github.com/agentstatelabs/oxtel"
+authors = ["AgentStateLabs <info@agentstatelabs.com>"]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
