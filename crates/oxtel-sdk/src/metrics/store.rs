@@ -15,6 +15,7 @@ use std::time::SystemTime;
 use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName};
 use metrics::{Metadata, Recorder, SharedString, Unit};
 
+use crate::metrics::adder::Adder;
 use crate::metrics::data::{Exemplar, HistogramPoint, MetricFamily, MetricKind, Point, PointValue};
 use crate::metrics::units::ucum;
 use crate::trace::{Scope, current_span_context};
@@ -259,7 +260,7 @@ impl Store {
         let filter = self.config.exemplar_filter;
         let entry = match kind {
             MetricKind::Counter => Entry::Counter(Arc::new(CounterCell {
-                value: CacheLine(AtomicU64::new(0)),
+                value: Adder::new(),
                 exemplar: Mutex::new(None),
                 filter,
             })),
@@ -320,7 +321,7 @@ impl Entry {
     fn point(&self, labels: &[(String, String)]) -> Option<Point> {
         let (value, exemplar) = match self {
             Entry::Counter(c) => (
-                PointValue::Counter(c.value.0.load(Ordering::Relaxed)),
+                PointValue::Counter(c.value.sum()),
                 lock(&c.exemplar).clone(),
             ),
             Entry::Gauge(g) => (
@@ -338,14 +339,8 @@ impl Entry {
     }
 }
 
-/// Keeps a value on its own cache line, so threads updating it don't also
-/// contend for whatever would otherwise share the line (the `Arc`'s counts,
-/// the exemplar slot).
-#[repr(align(128))]
-struct CacheLine<T>(T);
-
 struct CounterCell {
-    value: CacheLine<AtomicU64>,
+    value: Adder,
     exemplar: Mutex<Option<Exemplar>>,
     filter: ExemplarFilter,
 }
@@ -353,7 +348,7 @@ struct CounterCell {
 impl CounterFn for CounterCell {
     #[inline]
     fn increment(&self, value: u64) {
-        self.value.0.fetch_add(value, Ordering::Relaxed);
+        self.value.add(value);
         if self.filter != ExemplarFilter::AlwaysOff
             && let Some(e) = self.filter.capture(value as f64)
             && let Ok(mut slot) = self.exemplar.try_lock()
@@ -363,7 +358,7 @@ impl CounterFn for CounterCell {
     }
 
     fn absolute(&self, value: u64) {
-        self.value.0.fetch_max(value, Ordering::Relaxed);
+        self.value.raise_to(value);
     }
 }
 

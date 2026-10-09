@@ -66,3 +66,34 @@ jobs:
         run: |
           python3 -m pip install --quiet "prometheus-client==${PROMETHEUS_CLIENT_VERSION}"
           python3 scripts/check_openmetrics.py openmetrics.txt
+
+  # oxtel's output, decoded by a real OpenTelemetry Collector: traces over
+  # OTLP/HTTP (plain and gzip), and /metrics scraped by its Prometheus
+  # receiver, checked through its file exporter. See conformance/README.md.
+  collector:
+    runs-on: ubuntu-latest
+    env:
+      COLLECTOR_VERSION: "0.161.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build the conformance tests
+        run: cargo test -p oxtel-conformance --no-run
+      - name: Start the Collector
+        shell: bash
+        run: |
+          mkdir -p conformance/out && chmod 777 conformance/out
+          docker run -d --name otelcol --network host \
+            -v "$PWD/conformance/collector.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            -v "$PWD/conformance/out:/out" \
+            "otel/opentelemetry-collector-contrib:${COLLECTOR_VERSION}"
+          for i in $(seq 1 30); do
+            curl -sf -o /dev/null http://localhost:13133/ && exit 0
+            sleep 1
+          done
+          echo "the Collector didn't become healthy"; docker logs otelcol; exit 1
+      - name: Conformance
+        run: cargo test -p oxtel-conformance -- --ignored --test-threads=1
+      - name: Collector logs
+        if: always()
+        run: docker logs otelcol 2>&1 | tail -100

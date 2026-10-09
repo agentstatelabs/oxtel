@@ -1,0 +1,39 @@
+# The OpenTelemetry Collector used by oxtel's conformance tests.
+# Run with host networking so it can scrape the tests' /metrics on
+# localhost:9464, and mount a writable directory at /out.
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus:
+    config:
+      scrape_configs:
+        - job_name: oxtel
+          scrape_interval: 1s
+          scrape_timeout: 900ms
+          static_configs:
+            - targets: ["localhost:9464"]
+
+exporters:
+  file/traces:
+    path: /out/traces.json
+    flush_interval: 100ms
+  file/metrics:
+    path: /out/metrics.json
+    flush_interval: 100ms
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      exporters: [file/traces]
+    metrics:
+      receivers: [prometheus]
+      exporters: [file/metrics]

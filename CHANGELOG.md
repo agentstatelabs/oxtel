@@ -27,9 +27,11 @@ All notable changes to oxtel are recorded here. The format follows
   - Labels given in any order land in the same series.
   - Each metric keeps at most `cardinality_limit` series (default 2000), counting the `otel.metric.overflow` series that takes the rest.
   - Histograms in seconds get the semantic conventions' duration buckets, others the specification's defaults. Buckets can be set per metric.
+  - **Counters adapt to contention.** A counter stays one atomic until a compare-and-swap fails, which shows another thread is updating it at that moment. It then spreads across per-thread slots, each on its own cache line, and reading sums them. Eight threads on one series cost 0.4 ns per increment, against 20–58 ns for the official SDK. An uncontended counter keeps a single atomic.
   - A counter's value has its own cache line, and recording skips the exemplar check entirely when exemplars are off. Benchmarking showed cached-handle increments 22% faster and contended ones 24% faster as a result.
   - **Exemplars:** one per histogram bucket, and the latest per counter, linking a measurement to the trace it was made in. `OTEL_METRICS_EXEMPLAR_FILTER` chooses `trace_based` (the default: sampled spans only), `always_on` or `always_off`. Exemplars are skipped, not waited for, under contention.
   - `current_span_context()` is now cheap enough for hot paths, and finds the nearest recorded span when the current one is filtered out of traces.
+- **Conformance against a real OpenTelemetry Collector** (`conformance/`, run in CI). Spans exported over OTLP/HTTP, plain and gzipped, are checked as the Collector decodes them: ids, parents, remote-parent flags, kinds, typed attributes, status, events and links. `/metrics` is checked as the Collector's Prometheus receiver scrapes it: names, types, labels, values, and exemplars carrying the trace id.
 - **Benchmarks** (`bench/`, not published) against `tracing-opentelemetry` with `opentelemetry_sdk` 0.33, and against `metrics-exporter-prometheus`. The setups are matched, and end-to-end runs use isolated processes. Results and method are in `bench/RESULTS.md`.
   - Traces: 1.5–7× less overhead per operation.
   - Metrics: 1.8–2.8× faster with attributes on each call, and at parity or faster with cached handles.
