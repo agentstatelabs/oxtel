@@ -97,3 +97,31 @@ jobs:
       - name: Collector logs
         if: always()
         run: docker logs otelcol 2>&1 | tail -100
+
+  # Coverage-guided fuzzing of the parsers that read other services'
+  # requests (traceparent, tracestate, baggage) and configuration
+  # (OTEL_RESOURCE_ATTRIBUTES, OTEL_EXPORTER_OTLP_HEADERS). Each target runs
+  # for 60 s from the seed corpus; a crash uploads its input.
+  fuzz:
+    runs-on: ubuntu-latest
+    env:
+      CARGO_FUZZ_VERSION: "0.13.2"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked --version "${CARGO_FUZZ_VERSION}"
+      - name: Fuzz each target for 60 s
+        shell: bash
+        run: |
+          for target in $(cargo fuzz list); do
+            echo "::group::${target}"
+            cargo fuzz run "${target}" -- -max_total_time=60 -max_len=4096
+            echo "::endgroup::"
+          done
+      - name: Keep crashing inputs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts
