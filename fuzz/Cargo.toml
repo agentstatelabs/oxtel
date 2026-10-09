@@ -1,0 +1,54 @@
+[package]
+name = "oxtel-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+oxtel-sdk = { path = "../crates/oxtel-sdk" }
+oxtel-otlp = { path = "../crates/oxtel-otlp" }
+
+# Its own workspace, so the fuzz build (nightly, sanitizers) never touches
+# the main one.
+[workspace]
+members = ["."]
+
+[[bin]]
+name = "traceparent"
+path = "fuzz_targets/traceparent.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tracestate"
+path = "fuzz_targets/tracestate.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "baggage"
+path = "fuzz_targets/baggage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "carriers"
+path = "fuzz_targets/carriers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_lists"
+path = "fuzz_targets/config_lists.rs"
+test = false
+doc = false
+bench = false

@@ -1,0 +1,1 @@
+service.name=checkout,deployment.environment=prod%20eu

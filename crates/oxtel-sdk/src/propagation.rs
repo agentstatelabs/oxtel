@@ -125,6 +125,11 @@ pub fn format_traceparent(cx: &SpanContext) -> String {
 /// the spec requires, provided their first four fields have the same shape.
 pub fn parse_traceparent(value: &str) -> Option<(TraceId, SpanId, TraceFlags)> {
     let value = value.trim_matches(|c| c == ' ' || c == '\t');
+    // The header is ASCII. Checking first also makes the byte offsets below
+    // safe to slice at: in other text they can fall inside a character.
+    if !value.is_ascii() {
+        return None;
+    }
     let bytes = value.as_bytes();
     if bytes.len() < 55 {
         return None;
@@ -454,6 +459,19 @@ mod tests {
         ] {
             assert!(parse_traceparent(bad).is_none(), "accepted {bad:?}");
         }
+    }
+
+    /// Found by the property tests: a multi-byte character where the parser
+    /// slices made it panic instead of rejecting the header.
+    #[test]
+    fn non_ascii_traceparents_are_rejected_not_a_panic() {
+        let crafted = format!("0\u{10446}{}", "a".repeat(60));
+        assert!(parse_traceparent(&crafted).is_none());
+        let crafted = format!("00-{}\u{5229}{}", "a".repeat(31), "b".repeat(30));
+        assert!(parse_traceparent(&crafted).is_none());
+        let mut carrier = HashMap::new();
+        carrier.insert("traceparent".to_string(), "\u{5229}".repeat(30));
+        assert!(extract_trace_context(&carrier).is_none());
     }
 
     #[test]
