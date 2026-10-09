@@ -1,0 +1,319 @@
+//! OTLP/HTTP export against a local receiver that records each request.
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use oxtel_otlp::OtlpHttpExporter;
+use oxtel_otlp::proto::collector::trace::v1::{
+    ExportTracePartialSuccess, ExportTraceServiceRequest, ExportTraceServiceResponse,
+};
+use oxtel_otlp::proto::common::v1::any_value::Value as AnyValue;
+use oxtel_sdk::context::TraceFlags;
+use oxtel_sdk::trace::{
+    ExportError, InMemorySpanExporter, Sampler, SpanData, SpanExporter, TracerProvider,
+    attach_remote_parent,
+};
+use oxtel_sdk::{KeyValue, Resource, SpanContext, SpanId, TraceId};
+use prost::Message;
+use tracing_subscriber::layer::SubscriberExt;
+
+struct Request {
+    path: String,
+    headers: Vec<(String, String)>,
+    body: Vec<u8>,
+}
+
+impl Request {
+    fn header(&self, name: &str) -> Option<&str> {
+        self.headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.as_str())
+    }
+}
+
+/// A scripted reply: status, extra headers, body.
+type Reply = (u16, Vec<(&'static str, String)>, Vec<u8>);
+
+/// A receiver that answers each connection with the next scripted reply,
+/// `(status, extra headers, body)`, and records what it was sent.
+fn receiver(replies: Vec<Reply>) -> (String, Arc<Mutex<Vec<Request>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let record = Arc::clone(&seen);
+    std::thread::spawn(move || {
+        for (status, extra, reply) in replies {
+            let Ok((stream, _)) = listener.accept() else {
+                return;
+            };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            let path = line
+                .split_whitespace()
+                .nth(1)
+                .unwrap_or_default()
+                .to_string();
+            let mut headers = Vec::new();
+            loop {
+                let mut h = String::new();
+                reader.read_line(&mut h).unwrap();
+                let h = h.trim_end();
+                if h.is_empty() {
+                    break;
+                }
+                if let Some((k, v)) = h.split_once(':') {
+                    headers.push((k.trim().to_string(), v.trim().to_string()));
+                }
+            }
+            let len = headers
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case("content-length"))
+                .and_then(|(_, v)| v.parse::<usize>().ok())
+                .unwrap_or(0);
+            let mut body = vec![0; len];
+            reader.read_exact(&mut body).unwrap();
+            record.lock().unwrap().push(Request {
+                path,
+                headers,
+                body,
+            });
+            let mut stream = stream;
+            let mut head = format!(
+                "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n",
+                reply.len()
+            );
+            for (k, v) in extra {
+                head.push_str(&format!("{k}: {v}\r\n"));
+            }
+            head.push_str("\r\n");
+            stream.write_all(head.as_bytes()).unwrap();
+            stream.write_all(&reply).unwrap();
+        }
+    });
+    (base, seen)
+}
+
+/// Spans recorded through the real layer.
+fn spans() -> (Vec<SpanData>, SpanContext) {
+    let exporter = InMemorySpanExporter::default();
+    let provider = TracerProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_sampler(Sampler::AlwaysOn)
+        .with_simple_exporter(exporter.clone())
+        .build();
+    let remote = SpanContext {
+        trace_id: TraceId::random(),
+        span_id: SpanId::random(),
+        flags: TraceFlags::SAMPLED.with(TraceFlags::RANDOM),
+        is_remote: true,
+        ..Default::default()
+    };
+    let subscriber = tracing_subscriber::registry().with(provider.layer());
+    tracing::subscriber::with_default(subscriber, || {
+        let request = {
+            let _parent = attach_remote_parent(remote.clone());
+            tracing::info_span!(
+                "GET /items",
+                otel.kind = "server",
+                http.response.status_code = 200
+            )
+        };
+        request.in_scope(|| tracing::info_span!("load").in_scope(|| {}));
+    });
+    (exporter.finished_spans(), remote)
+}
+
+fn resource() -> Resource {
+    Resource::builder()
+        .without_env()
+        .with_service_name("checkout")
+        .build()
+}
+
+#[test]
+fn spans_arrive_as_protobuf_at_v1_traces() {
+    let (base, seen) = receiver(vec![(200, vec![], vec![])]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("{base}/v1/traces"))
+        .with_header("api-key", "k")
+        .build();
+    let (batch, remote) = spans();
+    exporter.export(&batch, &resource()).unwrap();
+
+    let seen = seen.lock().unwrap();
+    let request = &seen[0];
+    assert_eq!(request.path, "/v1/traces");
+    assert_eq!(
+        request.header("content-type"),
+        Some("application/x-protobuf")
+    );
+    assert_eq!(request.header("api-key"), Some("k"));
+    let decoded = ExportTraceServiceRequest::decode(request.body.as_slice()).unwrap();
+    let rs = &decoded.resource_spans[0];
+    let service = rs
+        .resource
+        .as_ref()
+        .unwrap()
+        .attributes
+        .iter()
+        .find(|kv| kv.key == "service.name");
+    assert_eq!(
+        service
+            .and_then(|kv| kv.value.as_ref())
+            .and_then(|v| v.value.clone()),
+        Some(AnyValue::StringValue("checkout".into()))
+    );
+    let scope = &rs.scope_spans[0];
+    assert_eq!(scope.scope.as_ref().unwrap().name, "http_export");
+    let by_name = |n: &str| scope.spans.iter().find(|s| s.name == n).unwrap();
+    let (server, load) = (by_name("GET /items"), by_name("load"));
+    assert_eq!(server.trace_id, remote.trace_id.to_bytes());
+    assert_eq!(server.parent_span_id, remote.span_id.to_bytes());
+    assert_eq!(server.kind, 2, "SPAN_KIND_SERVER");
+    // Sampled and random flags, plus "parent is remote".
+    assert_eq!(server.flags, 0x03 | 0x100 | 0x200);
+    assert_eq!(load.parent_span_id, server.span_id);
+    assert_eq!(load.flags, 0x03 | 0x100, "local parent");
+    assert!(load.end_time_unix_nano >= load.start_time_unix_nano);
+    let status = server
+        .attributes
+        .iter()
+        .find(|kv| kv.key == "http.response.status_code");
+    assert_eq!(
+        status
+            .and_then(|kv| kv.value.as_ref())
+            .and_then(|v| v.value.clone()),
+        Some(AnyValue::IntValue(200))
+    );
+}
+
+#[test]
+fn gzip_bodies_decompress_to_the_same_request() {
+    let (base, seen) = receiver(vec![(200, vec![], vec![])]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("{base}/v1/traces"))
+        .with_gzip(true)
+        .build();
+    let (batch, _) = spans();
+    exporter.export(&batch, &resource()).unwrap();
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].header("content-encoding"), Some("gzip"));
+    let mut raw = Vec::new();
+    flate2::read::GzDecoder::new(seen[0].body.as_slice())
+        .read_to_end(&mut raw)
+        .unwrap();
+    let decoded = ExportTraceServiceRequest::decode(raw.as_slice()).unwrap();
+    assert_eq!(decoded.resource_spans[0].scope_spans[0].spans.len(), 2);
+}
+
+#[test]
+fn retryable_statuses_are_retried_and_others_are_not() {
+    let (base, seen) = receiver(vec![
+        (503, vec![("Retry-After", "0".into())], vec![]),
+        (200, vec![], vec![]),
+    ]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("{base}/v1/traces"))
+        .with_initial_backoff(Duration::from_millis(10))
+        .build();
+    let (batch, _) = spans();
+    exporter.export(&batch, &resource()).unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 2);
+
+    let (base, seen) = receiver(vec![
+        (400, vec![], b"bad request".to_vec()),
+        (200, vec![], vec![]),
+    ]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("{base}/v1/traces"))
+        .with_initial_backoff(Duration::from_millis(10))
+        .build();
+    let err = exporter.export(&batch, &resource()).unwrap_err();
+    assert_eq!(
+        err,
+        ExportError::Rejected {
+            status: 400,
+            message: "bad request".into()
+        }
+    );
+    assert_eq!(seen.lock().unwrap().len(), 1, "a 400 isn't retried");
+}
+
+#[test]
+fn partial_success_counts_rejected_spans() {
+    let reply = ExportTraceServiceResponse {
+        partial_success: Some(ExportTracePartialSuccess {
+            rejected_spans: 2,
+            error_message: "too old".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (base, _) = receiver(vec![(200, vec![], reply)]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("{base}/v1/traces"))
+        .build();
+    let (batch, _) = spans();
+    exporter.export(&batch, &resource()).unwrap();
+    assert_eq!(exporter.rejected_spans(), 2);
+}
+
+#[test]
+fn an_unreachable_receiver_fails_within_the_timeout() {
+    // Bind and drop, so the port refuses connections.
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let exporter = OtlpHttpExporter::builder()
+        .with_url(format!("http://127.0.0.1:{port}/v1/traces"))
+        .with_timeout(Duration::from_millis(400))
+        .with_initial_backoff(Duration::from_millis(50))
+        .build();
+    let (batch, _) = spans();
+    let started = Instant::now();
+    let err = exporter.export(&batch, &resource()).unwrap_err();
+    assert!(matches!(err, ExportError::Transport(_)), "{err:?}");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[test]
+fn the_whole_pipeline_exports_on_flush() {
+    let (base, seen) = receiver(vec![(200, vec![], vec![])]);
+    let provider = TracerProvider::builder()
+        .with_resource(resource())
+        .with_sampler(Sampler::AlwaysOn)
+        .with_batch_exporter(
+            OtlpHttpExporter::builder()
+                .with_url(format!("{base}/v1/traces"))
+                .build(),
+        )
+        .build();
+    let subscriber = tracing_subscriber::registry().with(provider.layer());
+    tracing::subscriber::with_default(subscriber, || {
+        tracing::info_span!("job", items = 3).in_scope(|| {
+            tracing::info!(processed = 3, "done");
+        });
+    });
+    provider.force_flush().unwrap();
+    let seen = seen.lock().unwrap();
+    let decoded = ExportTraceServiceRequest::decode(seen[0].body.as_slice()).unwrap();
+    let span = &decoded.resource_spans[0].scope_spans[0].spans[0];
+    assert_eq!(span.name, "job");
+    assert_eq!(span.events[0].name, "done");
+    assert!(
+        span.attributes
+            .contains(&oxtel_otlp::transform::key_value(&KeyValue::new(
+                "items", 3i64
+            )))
+    );
+    assert_eq!(provider.stats().exported, 1);
+}

@@ -1,0 +1,31 @@
+[package]
+name = "oxtel-sdk"
+description = "Core of oxtel: data model, tracing layer, metrics recorder, processors and samplers"
+readme = "../../README.md"
+keywords = ["opentelemetry", "tracing", "metrics", "w3c", "trace-context"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Carrier implementations for `http::HeaderMap`.
+http = ["dep:http"]
+
+[dependencies]
+fastrand = "2.4"
+http = { version = "1.4", optional = true }
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
+
+[lints]
+workspace = true
