@@ -27,8 +27,13 @@ All notable changes to oxtel are recorded here. The format follows
   - Labels given in any order land in the same series.
   - Each metric keeps at most `cardinality_limit` series (default 2000), counting the `otel.metric.overflow` series that takes the rest.
   - Histograms in seconds get the semantic conventions' duration buckets, others the specification's defaults. Buckets can be set per metric.
+  - A counter's value has its own cache line, and recording skips the exemplar check entirely when exemplars are off. Benchmarking showed cached-handle increments 22% faster and contended ones 24% faster as a result.
   - **Exemplars:** one per histogram bucket, and the latest per counter, linking a measurement to the trace it was made in. `OTEL_METRICS_EXEMPLAR_FILTER` chooses `trace_based` (the default: sampled spans only), `always_on` or `always_off`. Exemplars are skipped, not waited for, under contention.
   - `current_span_context()` is now cheap enough for hot paths, and finds the nearest recorded span when the current one is filtered out of traces.
+- **Benchmarks** (`bench/`, not published) against `tracing-opentelemetry` with `opentelemetry_sdk` 0.33, and against `metrics-exporter-prometheus`. The setups are matched, and end-to-end runs use isolated processes. Results and method are in `bench/RESULTS.md`.
+  - Traces: 1.5–7× less overhead per operation.
+  - Metrics: 1.8–2.8× faster with attributes on each call, and at parity or faster with cached handles.
+  - End to end: 1.9× the export throughput at 2.5× less CPU per span, with memory bounded.
 - **`oxtel-prometheus`: Prometheus and OpenMetrics exposition.**
   - OpenMetrics 1.0, with exemplars, `# UNIT` and `# EOF`; or the classic text format. Chosen from the scrape's `Accept` header.
   - Names follow OpenTelemetry's Prometheus compatibility rules:
