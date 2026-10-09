@@ -45,6 +45,7 @@ impl ExemplarFilter {
         }
     }
 
+    #[inline]
     fn capture(self, value: f64) -> Option<Exemplar> {
         let (trace_id, span_id) = match self {
             ExemplarFilter::AlwaysOff => return None,
@@ -258,7 +259,7 @@ impl Store {
         let filter = self.config.exemplar_filter;
         let entry = match kind {
             MetricKind::Counter => Entry::Counter(Arc::new(CounterCell {
-                value: AtomicU64::new(0),
+                value: CacheLine(AtomicU64::new(0)),
                 exemplar: Mutex::new(None),
                 filter,
             })),
@@ -319,7 +320,7 @@ impl Entry {
     fn point(&self, labels: &[(String, String)]) -> Option<Point> {
         let (value, exemplar) = match self {
             Entry::Counter(c) => (
-                PointValue::Counter(c.value.load(Ordering::Relaxed)),
+                PointValue::Counter(c.value.0.load(Ordering::Relaxed)),
                 lock(&c.exemplar).clone(),
             ),
             Entry::Gauge(g) => (
@@ -337,16 +338,24 @@ impl Entry {
     }
 }
 
+/// Keeps a value on its own cache line, so threads updating it don't also
+/// contend for whatever would otherwise share the line (the `Arc`'s counts,
+/// the exemplar slot).
+#[repr(align(128))]
+struct CacheLine<T>(T);
+
 struct CounterCell {
-    value: AtomicU64,
+    value: CacheLine<AtomicU64>,
     exemplar: Mutex<Option<Exemplar>>,
     filter: ExemplarFilter,
 }
 
 impl CounterFn for CounterCell {
+    #[inline]
     fn increment(&self, value: u64) {
-        self.value.fetch_add(value, Ordering::Relaxed);
-        if let Some(e) = self.filter.capture(value as f64)
+        self.value.0.fetch_add(value, Ordering::Relaxed);
+        if self.filter != ExemplarFilter::AlwaysOff
+            && let Some(e) = self.filter.capture(value as f64)
             && let Ok(mut slot) = self.exemplar.try_lock()
         {
             *slot = Some(e);
@@ -354,7 +363,7 @@ impl CounterFn for CounterCell {
     }
 
     fn absolute(&self, value: u64) {
-        self.value.fetch_max(value, Ordering::Relaxed);
+        self.value.0.fetch_max(value, Ordering::Relaxed);
     }
 }
 

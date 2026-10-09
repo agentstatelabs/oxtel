@@ -138,6 +138,8 @@ Each follows the semantic conventions.
 | **2: breadth** (0.3–0.5) | OpAMP client. OTLP over gRPC. Exponential histograms, views and delta temporality. `oxtel-sql`, `oxtel-reqwest`, `oxtel-tokio`, `oxtel-genai`. Cloud resource detectors. Fuzzing. | Outside adopters. |
 | **3: 1.0** | API freeze. Conformance suite and benchmarks published. Documentation site. Governance documents. Readiness review for donation. | Stable API. |
 
+**Phase 0 results** (benchmarks and the gate) are in [`bench/RESULTS.md`](bench/RESULTS.md).
+
 ## 7. Governance
 
 - **License and contributions.** Apache-2.0, with contributions signed off under the DCO.
