@@ -1,0 +1,24 @@
+[package]
+name = "oxtel-prometheus"
+description = "Prometheus and OpenMetrics exposition for oxtel"
+readme = "../../README.md"
+keywords = ["prometheus", "openmetrics", "metrics", "opentelemetry", "exemplars"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1" }
+
+[dev-dependencies]
+metrics = "0.24"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[lints]
+workspace = true

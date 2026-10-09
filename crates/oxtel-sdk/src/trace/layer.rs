@@ -366,9 +366,23 @@ pub fn span_context(span: &tracing::Span) -> Option<SpanContext> {
     .flatten()
 }
 
-/// The context of the current span. See [`span_context`].
+/// The context of the current span, or of its nearest ancestor this crate's
+/// layer records (a span filtered out of the trace layer has none). See
+/// [`span_context`].
+///
+/// Cheap enough for hot paths, such as attaching exemplars to metrics: it
+/// reads the dispatcher's current span without creating a `Span` handle.
 pub fn current_span_context() -> Option<SpanContext> {
-    span_context(&tracing::Span::current())
+    tracing::dispatcher::get_default(|dispatch| {
+        let current = dispatch.current_span();
+        let id = current.id()?;
+        let registry = dispatch.downcast_ref::<Registry>()?;
+        registry.span(id)?.scope().find_map(|span| {
+            span.extensions()
+                .get::<SpanState>()
+                .map(|s| s.context.clone())
+        })
+    })
 }
 
 fn context_of<S>(ctx: &Context<'_, S>, id: &Id) -> Option<SpanContext>

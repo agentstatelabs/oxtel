@@ -8,6 +8,7 @@
 
 pub mod context;
 pub mod id;
+pub mod metrics;
 pub mod propagation;
 pub mod resource;
 pub mod trace;
