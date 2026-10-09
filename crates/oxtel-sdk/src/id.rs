@@ -106,8 +106,9 @@ fn decode_lower_hex(hex: &str, out: &mut [u8]) -> Option<()> {
         b'a'..=b'f' => Some(c - b'a' + 10),
         _ => None,
     };
-    for (byte, pair) in out.iter_mut().zip(digits.chunks_exact(2)) {
-        *byte = (nibble(pair[0])? << 4) | nibble(pair[1])?;
+    let (pairs, _) = digits.as_chunks::<2>();
+    for (byte, [high, low]) in out.iter_mut().zip(pairs) {
+        *byte = (nibble(*high)? << 4) | nibble(*low)?;
     }
     Some(())
 }
