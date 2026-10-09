@@ -8,7 +8,7 @@ We aim to acknowledge reports within three working days, and to agree a disclosu
 
 ## Scope
 
-oxtel parses input from outside the process: trace context headers, configuration files and OpAMP messages. Bugs that let that input crash, stall or exhaust the memory of a program using oxtel are in scope, as is any way telemetry could leak data that oxtel promises not to record.
+oxtel parses input from outside the process: trace context and baggage headers, and `OTEL_*` environment variables. Configuration files and OpAMP messages will join them as those features land. Bugs that let that input crash, stall or exhaust the memory of a program using oxtel are in scope, as is any way telemetry could leak data that oxtel promises not to record.
 
 ## Supported versions
 
