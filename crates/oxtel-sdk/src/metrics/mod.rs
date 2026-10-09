@@ -16,6 +16,7 @@
 //!
 //! In a program, install it once with `metrics::set_global_recorder`.
 
+mod adder;
 mod data;
 mod provider;
 mod store;

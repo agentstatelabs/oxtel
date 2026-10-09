@@ -1074,6 +1074,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxtel-conformance"
+version = "0.0.0"
+dependencies = [
+ "metrics",
+ "oxtel-otlp",
+ "oxtel-prometheus",
+ "oxtel-sdk",
+ "serde_json",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "oxtel-otlp"
 version = "0.0.1"
 dependencies = [

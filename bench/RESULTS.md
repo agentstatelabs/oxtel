@@ -38,12 +38,12 @@ Median from criterion, with its 95% confidence interval. "vs oxtel" above 1 mean
 |---|---|---|---|
 | Counter, attributes on each call | **13.0 ns** | 22.9 ns (1.76×) | 36.2 ns (2.78×) |
 | Histogram, attributes on each call | **19.6 ns** | 34.6 ns (1.76×) | 43.4 ns (2.21×) |
-| Counter, cached handle | **1.9 ns** | 2.0 ns (1.05×) | 2.0 ns (1.02×) |
+| Counter, cached handle | **2.0 ns** | 2.1 ns (1.04×) | 2.0 ns (1.00×) |
 | Histogram, cached handle | **5.1 ns** | 8.9 ns (1.76×) | 9.1 ns (1.80×) |
-| Counter, 8 threads on one series | 28.5–32.7 ns | 20.4–51.1 ns | 61.6–64.0 ns |
+| Counter, 8 threads on one series | **0.40–0.42 ns** | 20.4–58.1 ns | 61.6–76.9 ns |
 
 - **"Attributes on each call"** is the common pattern: `counter!("requests", "route" => r).increment(1)`, or `counter.add(1, &attrs)`. It includes looking the series up.
-- **8 threads on one series** varies between runs, so ranges over four runs are shown. oxtel is steady at about 30 ns. The official SDK flips between about 20 ns and 51 ns. Striping hot counters across per-thread slots would cut oxtel's figure further, at some memory per series; it's a follow-up, not done here.
+- **8 threads on one series** is the wall time for all eight threads' increments, divided by the number of increments; ranges are over repeated runs. oxtel counters stay one atomic until threads actually contend for them. Then they spread across per-thread slots, each on its own cache line, and reading sums the slots. Under contention that makes an increment about **50–190× cheaper** than the alternatives (49–145× against the official SDK), and an uncontended counter keeps a single atomic and costs no extra memory. Before this change, oxtel took about 30 ns here and the official SDK swung between 20 and 51 ns.
 
 **Exemplars** (oxtel only, since the official Rust SDK doesn't record them): a histogram recorded inside a sampled span costs 6.1 ns with exemplars off and 54.9 ns with them on. The difference is reading the span context and timestamping the exemplar. It applies only to measurements inside sampled spans, under the default `trace_based` filter.
 
@@ -83,12 +83,12 @@ Reading these:
 Phase 0's gate was "oxtel equal or better on overhead". It passes.
 
 - **Traces:** oxtel is better in every case, by 1.5 to 7 times.
-- **Metrics:** better or equal everywhere except one contended series, where the official SDK is sometimes faster.
+- **Metrics:** better or equal everywhere. The one gap, a contended series, is closed by contention-adaptive counters.
 - **End to end:** more throughput, less CPU, bounded memory.
 
 ## Follow-ups
 
-- **Striped counters** for hot series under heavy contention.
+- **Contended histograms.** Only counters spread out under contention. A histogram's bucket counts and running sum are still one set of atomics shared by every thread.
 - **A cheaper exemplar timestamp**, for example a coarse clock.
 - **Run these in CI on fixed hardware** to catch regressions. Shared CI runners are too noisy for absolute numbers.
 
