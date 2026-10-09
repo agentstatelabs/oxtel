@@ -161,6 +161,6 @@ Each follows the semantic conventions.
 
 1. **The name.**
 2. **The MSRV.** Probably the latest stable release minus two.
-3. **Events inside spans.** Should a `tracing` event inside a span become a span event, a log record, or both by configuration? The OpenTelemetry direction is log records that carry the span's context, so the proposal is log records by default.
+3. **Events inside spans.** *Decided in Phase 1:* each event becomes a log record that carries the span's context, the OpenTelemetry direction. Span events stay available for backends that need them. The `oxtel` facade turns them off when it sets up a log pipeline, and leaves them on when there is none, so events aren't lost.
 4. **The metrics API.** Is the `metrics` facade enough, or do we need an optional typed API for instruments it can't express, such as observable callbacks and units on every record?
 5. **OpAMP.** Write our own client, or build on New Relic's `newrelic-opamp-rs` (small and active)?

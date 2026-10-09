@@ -17,20 +17,18 @@
 
 mod data;
 mod export;
-mod layer;
+pub(crate) mod layer;
 mod processor;
 mod provider;
 mod sampler;
 
+pub use crate::export::{BatchConfig, ExportError, ProcessorStats};
 pub use data::{Event, Link, Scope, SpanData, SpanKind, Status};
-pub use export::{ExportError, InMemorySpanExporter, SpanExporter};
+pub use export::{InMemorySpanExporter, SpanExporter};
 pub use layer::{
     RemoteParentGuard, SpanLimits, TraceLayer, attach_remote_parent, current_span_context,
     span_context,
 };
-pub use processor::{
-    BatchConfig, BatchSpanProcessor, NoopSpanProcessor, ProcessorStats, SimpleSpanProcessor,
-    SpanProcessor,
-};
+pub use processor::{BatchSpanProcessor, NoopSpanProcessor, SimpleSpanProcessor, SpanProcessor};
 pub use provider::{TracerProvider, TracerProviderBuilder};
 pub use sampler::Sampler;

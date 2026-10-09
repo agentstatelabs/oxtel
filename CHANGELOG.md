@@ -6,10 +6,23 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **One OTLP exporter serves every signal.** `OtlpHttpExporter` is cheap to clone, and clones share one connection pool. Each signal resolves its own endpoint, headers, compression and timeout from the specification's `OTEL_EXPORTER_OTLP_*` and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_*` variables. `with_endpoint(base)` sends every signal to `{base}/v1/{signal}`, and `with_url(signal, url)` sets one signal's URL exactly; these replace `with_url(url)`. `rejected(signal)` replaces `rejected_spans()`.
+- Each OTLP request's timeout is now the time left in the export, so retries can't overrun the export timeout.
+- `ExportError`, `ProcessorStats` and `BatchConfig` live in `oxtel_sdk::export`, shared by every signal. `oxtel_sdk::trace` still re-exports them.
+
 ### Fixed
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **`oxtel-sdk`: logs from `tracing` events.**
+  - `LogLayer`, from `LoggerProvider::layer`. Each event becomes an OpenTelemetry log record: the level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. A name given with `name:` becomes the event name.
+  - Inside a span, a record carries the span's trace and span ids, even when the span isn't sampled.
+  - Events forwarded from the `log` crate by `tracing-log` keep their original target.
+  - Attribute limits from `OTEL_LOGRECORD_ATTRIBUTE_COUNT_LIMIT`; source file and line as `code.*` attributes on request.
+  - Batch, simple and no-op processors. The batch processor shares the span processor's worker, configured from `OTEL_BLRP_*`.
+  - **Events inside spans:** a tracer provider's `with_span_events(false)` sends events out as log records only, as OpenTelemetry now recommends.
+- **`oxtel-otlp`: logs over OTLP/HTTP**, checked against a real Collector in CI.
 - **`oxtel-sdk`: traces from `tracing` spans.**
   - `TraceLayer`, a `tracing-subscriber` layer. Span fields become attributes. `otel.name`, `otel.kind`, `otel.status_code` and `otel.status_description` set the name, kind and status. Events inside a span become span events, and `follows_from` becomes a link.
   - A sampler decides when a span starts. Unsampled spans keep their ids, so logs and outgoing requests can still carry them.

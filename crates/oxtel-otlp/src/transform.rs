@@ -2,43 +2,80 @@
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use oxtel_sdk::logs::LogRecord;
 use oxtel_sdk::trace::{Link, Scope, SpanData, SpanKind, Status};
 use oxtel_sdk::{KeyValue, Resource, Value};
 
+use crate::proto::collector::logs::v1::ExportLogsServiceRequest;
 use crate::proto::collector::trace::v1::ExportTraceServiceRequest;
 use crate::proto::common::v1 as common;
+use crate::proto::logs::v1 as logs;
 use crate::proto::resource::v1 as resource;
 use crate::proto::trace::v1 as trace;
 
 /// The OTLP request for a batch of spans: one resource, the spans grouped by
 /// instrumentation scope, in the order the scopes first appear.
 pub fn traces_request(batch: &[SpanData], res: &Resource) -> ExportTraceServiceRequest {
-    let mut scopes: Vec<(&Scope, Vec<trace::Span>)> = Vec::new();
-    for span in batch {
-        let converted = span_to_proto(span);
-        match scopes.iter_mut().find(|(s, _)| *s == &span.scope) {
-            Some((_, spans)) => spans.push(converted),
-            None => scopes.push((&span.scope, vec![converted])),
-        }
-    }
     ExportTraceServiceRequest {
         resource_spans: vec![trace::ResourceSpans {
             resource: Some(resource_to_proto(res)),
-            scope_spans: scopes
+            scope_spans: by_scope(batch, |s| &s.scope, span_to_proto)
                 .into_iter()
                 .map(|(scope, spans)| trace::ScopeSpans {
-                    scope: Some(common::InstrumentationScope {
-                        name: scope.name.to_string(),
-                        version: scope.version.as_deref().unwrap_or_default().to_string(),
-                        attributes: Vec::new(),
-                        dropped_attributes_count: 0,
-                    }),
+                    scope: Some(scope_to_proto(scope)),
                     spans,
                     schema_url: String::new(),
                 })
                 .collect(),
             schema_url: res.schema_url().unwrap_or_default().to_string(),
         }],
+    }
+}
+
+/// The OTLP request for a batch of log records: one resource, the records
+/// grouped by instrumentation scope, in the order the scopes first appear.
+pub fn logs_request(batch: &[LogRecord], res: &Resource) -> ExportLogsServiceRequest {
+    ExportLogsServiceRequest {
+        resource_logs: vec![logs::ResourceLogs {
+            resource: Some(resource_to_proto(res)),
+            scope_logs: by_scope(batch, |r| &r.scope, log_to_proto)
+                .into_iter()
+                .map(|(scope, log_records)| logs::ScopeLogs {
+                    scope: Some(scope_to_proto(scope)),
+                    log_records,
+                    schema_url: String::new(),
+                })
+                .collect(),
+            schema_url: res.schema_url().unwrap_or_default().to_string(),
+        }],
+    }
+}
+
+/// `items` converted and grouped by scope, scopes in order of first
+/// appearance.
+fn by_scope<'a, T, P>(
+    items: &'a [T],
+    scope: impl Fn(&'a T) -> &'a Scope,
+    convert: impl Fn(&T) -> P,
+) -> Vec<(&'a Scope, Vec<P>)> {
+    let mut scopes: Vec<(&Scope, Vec<P>)> = Vec::new();
+    for item in items {
+        let s = scope(item);
+        let converted = convert(item);
+        match scopes.iter_mut().find(|(existing, _)| *existing == s) {
+            Some((_, group)) => group.push(converted),
+            None => scopes.push((s, vec![converted])),
+        }
+    }
+    scopes
+}
+
+fn scope_to_proto(scope: &Scope) -> common::InstrumentationScope {
+    common::InstrumentationScope {
+        name: scope.name.to_string(),
+        version: scope.version.as_deref().unwrap_or_default().to_string(),
+        attributes: Vec::new(),
+        dropped_attributes_count: 0,
     }
 }
 
@@ -115,6 +152,30 @@ fn span_to_proto(span: &SpanData) -> trace::Span {
             message,
             code: code as i32,
         }),
+    }
+}
+
+fn log_to_proto(record: &LogRecord) -> logs::LogRecord {
+    logs::LogRecord {
+        time_unix_nano: unix_nanos(record.time),
+        observed_time_unix_nano: unix_nanos(record.observed_time),
+        severity_number: i32::from(record.severity.number()),
+        severity_text: record.severity_text.to_string(),
+        body: record.body.as_ref().map(any_value),
+        attributes: record.attributes.iter().map(key_value).collect(),
+        dropped_attributes_count: record.dropped_attributes,
+        flags: record
+            .trace_id
+            .map_or(0, |_| u32::from(record.trace_flags.to_u8())),
+        trace_id: record
+            .trace_id
+            .map(|t| t.to_bytes().to_vec())
+            .unwrap_or_default(),
+        span_id: record
+            .span_id
+            .map(|s| s.to_bytes().to_vec())
+            .unwrap_or_default(),
+        event_name: record.event_name.as_deref().unwrap_or_default().to_string(),
     }
 }
 

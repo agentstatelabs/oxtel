@@ -66,7 +66,7 @@ impl Stack {
                     .with_sampler(oxtel_sdk::trace::Sampler::AlwaysOn)
                     .with_batch_exporter_config(
                         oxtel_otlp::OtlpHttpExporter::builder()
-                            .with_url(url)
+                            .with_url(oxtel_otlp::Signal::Traces, url)
                             .build(),
                         oxtel_sdk::trace::BatchConfig::default(),
                     )

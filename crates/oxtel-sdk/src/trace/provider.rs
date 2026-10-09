@@ -2,12 +2,12 @@
 
 use std::sync::Arc;
 
+use crate::export::{BatchConfig, ExportError, ProcessorStats};
 use crate::resource::Resource;
-use crate::trace::export::{ExportError, SpanExporter};
+use crate::trace::export::SpanExporter;
 use crate::trace::layer::{Shared, SpanLimits, TraceLayer};
 use crate::trace::processor::{
-    BatchConfig, BatchSpanProcessor, NoopSpanProcessor, ProcessorStats, SimpleSpanProcessor,
-    SpanProcessor,
+    BatchSpanProcessor, NoopSpanProcessor, SimpleSpanProcessor, SpanProcessor,
 };
 use crate::trace::sampler::Sampler;
 

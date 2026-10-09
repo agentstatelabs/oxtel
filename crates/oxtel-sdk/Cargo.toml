@@ -26,7 +26,9 @@ tracing-core = { version = "0.1.36", default-features = false, features = ["std"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
+log = "0.4.34"
 proptest = "1.11"
+tracing-log = { version = "0.2", default-features = false, features = ["log-tracer", "std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
 
 [lints]

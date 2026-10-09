@@ -1,32 +1,80 @@
 //! OTLP over HTTP with protobuf bodies (`http/protobuf`).
 
 use std::io::Write as _;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use oxtel_sdk::Resource;
-use oxtel_sdk::trace::{ExportError, SpanData, SpanExporter};
+use oxtel_sdk::export::ExportError;
+use oxtel_sdk::logs::{LogExporter, LogRecord};
+use oxtel_sdk::trace::{SpanData, SpanExporter};
 use prost::Message;
 
+use crate::proto::collector::logs::v1::ExportLogsServiceResponse;
 use crate::proto::collector::trace::v1::ExportTraceServiceResponse;
-use crate::transform::traces_request;
+use crate::transform::{logs_request, traces_request};
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:4318";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Exports spans to an OTLP/HTTP receiver, such as an OpenTelemetry
-/// Collector, at `{endpoint}/v1/traces`.
+/// A kind of telemetry OTLP carries.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Signal {
+    /// Spans, sent to `/v1/traces`.
+    Traces,
+    /// Metrics, sent to `/v1/metrics`.
+    Metrics,
+    /// Log records, sent to `/v1/logs`.
+    Logs,
+}
+
+impl Signal {
+    const ALL: [Signal; 3] = [Signal::Traces, Signal::Metrics, Signal::Logs];
+
+    /// The signal's name in OTLP paths: `traces`, `metrics` or `logs`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Signal::Traces => "traces",
+            Signal::Metrics => "metrics",
+            Signal::Logs => "logs",
+        }
+    }
+
+    fn env(self) -> &'static str {
+        match self {
+            Signal::Traces => "TRACES",
+            Signal::Metrics => "METRICS",
+            Signal::Logs => "LOGS",
+        }
+    }
+}
+
+/// Exports to an OTLP/HTTP receiver, such as an OpenTelemetry Collector:
+/// spans to `{endpoint}/v1/traces` and log records to `{endpoint}/v1/logs`.
+/// Clones share one connection pool, so one exporter can serve every
+/// pipeline.
 ///
 /// Retryable failures (429, 502, 503, 504 and connection errors) are
 /// retried with exponential backoff, honouring `Retry-After`, until the
 /// export timeout. Other failures aren't retried.
+#[derive(Clone)]
 pub struct OtlpHttpExporter {
+    inner: Arc<Inner>,
+}
+
+struct Inner {
     agent: ureq::Agent,
+    targets: [Target; 3],
+    initial_backoff: Duration,
+}
+
+/// Where one signal goes, and how.
+struct Target {
     url: String,
     headers: Vec<(String, String)>,
     gzip: bool,
     timeout: Duration,
-    initial_backoff: Duration,
     rejected: AtomicU64,
 }
 
@@ -36,107 +84,209 @@ impl OtlpHttpExporter {
         OtlpHttpExporterBuilder::from_env()
     }
 
-    /// The URL spans are sent to.
-    pub fn url(&self) -> &str {
-        &self.url
+    /// The URL `signal` is sent to.
+    pub fn url(&self, signal: Signal) -> &str {
+        &self.inner.targets[signal as usize].url
     }
 
-    /// Spans the receiver accepted the request for but rejected, as
-    /// reported in partial-success responses.
-    pub fn rejected_spans(&self) -> u64 {
-        self.rejected.load(Ordering::Relaxed)
+    /// Items of `signal` (spans, log records) that the receiver accepted
+    /// the request for but rejected, as reported in partial-success
+    /// responses.
+    pub fn rejected(&self, signal: Signal) -> u64 {
+        self.inner.targets[signal as usize]
+            .rejected
+            .load(Ordering::Relaxed)
     }
 
-    fn send(&self, body: &[u8]) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    /// Send `message` for `signal`, retrying as the specification allows.
+    /// `rejected_in` reads the rejected count from a success response.
+    fn send(
+        &self,
+        signal: Signal,
+        message: &impl Message,
+        rejected_in: impl Fn(&[u8]) -> Option<i64>,
+    ) -> Result<(), ExportError> {
+        let target = &self.inner.targets[signal as usize];
+        let mut body = message.encode_to_vec();
+        if target.gzip {
+            let mut encoder =
+                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+            encoder
+                .write_all(&body)
+                .and_then(|()| encoder.finish())
+                .map(|compressed| body = compressed)
+                .map_err(|e| ExportError::Transport(format!("gzip: {e}")))?;
+        }
+        let deadline = Instant::now() + target.timeout;
+        let mut backoff = self.inner.initial_backoff;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let (error, wait) = match self.post(target, &body, remaining) {
+                Ok(mut response) => {
+                    let status = response.status().as_u16();
+                    if (200..300).contains(&status) {
+                        let reply = response.body_mut().read_to_vec().unwrap_or_default();
+                        if let Some(n) = rejected_in(&reply)
+                            && n > 0
+                        {
+                            target.rejected.fetch_add(n as u64, Ordering::Relaxed);
+                        }
+                        return Ok(());
+                    }
+                    let error = ExportError::Rejected {
+                        status,
+                        message: response
+                            .body_mut()
+                            .read_to_string()
+                            .unwrap_or_default()
+                            .chars()
+                            .take(512)
+                            .collect(),
+                    };
+                    if !retryable(status) {
+                        return Err(error);
+                    }
+                    (error, retry_after(&response))
+                }
+                Err(ureq::Error::Timeout(_)) => (ExportError::Timeout, None),
+                Err(e) => (ExportError::Transport(e.to_string()), None),
+            };
+            let wait = wait.unwrap_or_else(|| jitter(backoff));
+            if Instant::now() + wait >= deadline {
+                return Err(error);
+            }
+            std::thread::sleep(wait);
+            backoff = (backoff * 2).min(Duration::from_secs(5));
+        }
+    }
+
+    fn post(
+        &self,
+        target: &Target,
+        body: &[u8],
+        timeout: Duration,
+    ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
         let mut request = self
+            .inner
             .agent
-            .post(&self.url)
+            .post(&target.url)
+            .config()
+            .timeout_global(Some(timeout.max(Duration::from_millis(1))))
+            .build()
             .header("Content-Type", "application/x-protobuf");
-        if self.gzip {
+        if target.gzip {
             request = request.header("Content-Encoding", "gzip");
         }
-        for (name, value) in &self.headers {
+        for (name, value) in &target.headers {
             request = request.header(name, value);
         }
         request.send(body)
     }
 }
 
-/// Builds an [`OtlpHttpExporter`]. Settings set on the builder override the
-/// environment.
 #[derive(Clone, Debug)]
-pub struct OtlpHttpExporterBuilder {
+struct TargetConfig {
     url: String,
     headers: Vec<(String, String)>,
     gzip: bool,
     timeout: Duration,
+}
+
+/// Builds an [`OtlpHttpExporter`]. Settings set on the builder override the
+/// environment, for every signal unless they name one.
+#[derive(Clone, Debug)]
+pub struct OtlpHttpExporterBuilder {
+    targets: [TargetConfig; 3],
     initial_backoff: Duration,
 }
 
 impl OtlpHttpExporterBuilder {
-    /// Settings from the environment:
-    /// - endpoint: `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, used as is, or
-    ///   `OTEL_EXPORTER_OTLP_ENDPOINT` with `/v1/traces` appended, or
-    ///   `http://localhost:4318/v1/traces`;
+    /// Settings from the environment, for each signal (`TRACES`, `METRICS`,
+    /// `LOGS`):
+    /// - endpoint: `OTEL_EXPORTER_OTLP_{SIGNAL}_ENDPOINT`, used as is, or
+    ///   `OTEL_EXPORTER_OTLP_ENDPOINT` with `/v1/{signal}` appended, or
+    ///   `http://localhost:4318/v1/{signal}`;
     /// - headers: `OTEL_EXPORTER_OTLP_HEADERS`, then
-    ///   `OTEL_EXPORTER_OTLP_TRACES_HEADERS`;
-    /// - compression: `OTEL_EXPORTER_OTLP_[TRACES_]COMPRESSION` (`gzip`);
-    /// - timeout: `OTEL_EXPORTER_OTLP_[TRACES_]TIMEOUT`, in milliseconds.
+    ///   `OTEL_EXPORTER_OTLP_{SIGNAL}_HEADERS`;
+    /// - compression: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]COMPRESSION` (`gzip`);
+    /// - timeout: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]TIMEOUT`, in milliseconds.
     pub fn from_env() -> Self {
         let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
-        let url = resolve_url(
-            var("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT").as_deref(),
-            var("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
-            "traces",
-        );
-        let mut headers = Vec::new();
-        for name in [
-            "OTEL_EXPORTER_OTLP_HEADERS",
-            "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
-        ] {
-            for (k, v) in var(name).map(|h| parse_headers(&h)).unwrap_or_default() {
-                headers
-                    .retain(|(existing, _): &(String, String)| !existing.eq_ignore_ascii_case(&k));
-                headers.push((k, v));
+        let target = |signal: Signal| {
+            let specific =
+                |setting: &str| var(&format!("OTEL_EXPORTER_OTLP_{}_{setting}", signal.env()));
+            let url = resolve_url(
+                specific("ENDPOINT").as_deref(),
+                var("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
+                signal.name(),
+            );
+            let mut headers: Vec<(String, String)> = Vec::new();
+            for raw in [var("OTEL_EXPORTER_OTLP_HEADERS"), specific("HEADERS")]
+                .into_iter()
+                .flatten()
+            {
+                for (k, v) in parse_headers(&raw) {
+                    headers.retain(|(existing, _)| !existing.eq_ignore_ascii_case(&k));
+                    headers.push((k, v));
+                }
             }
-        }
-        let compression = var("OTEL_EXPORTER_OTLP_TRACES_COMPRESSION")
-            .or_else(|| var("OTEL_EXPORTER_OTLP_COMPRESSION"));
-        let timeout = var("OTEL_EXPORTER_OTLP_TRACES_TIMEOUT")
-            .or_else(|| var("OTEL_EXPORTER_OTLP_TIMEOUT"))
-            .and_then(|ms| ms.trim().parse::<u64>().ok())
-            .map_or(DEFAULT_TIMEOUT, Duration::from_millis);
+            let compression =
+                specific("COMPRESSION").or_else(|| var("OTEL_EXPORTER_OTLP_COMPRESSION"));
+            let timeout = specific("TIMEOUT")
+                .or_else(|| var("OTEL_EXPORTER_OTLP_TIMEOUT"))
+                .and_then(|ms| ms.trim().parse::<u64>().ok())
+                .map_or(DEFAULT_TIMEOUT, Duration::from_millis);
+            TargetConfig {
+                url,
+                headers,
+                gzip: compression.is_some_and(|c| c.trim().eq_ignore_ascii_case("gzip")),
+                timeout,
+            }
+        };
         OtlpHttpExporterBuilder {
-            url,
-            headers,
-            gzip: compression.is_some_and(|c| c.trim().eq_ignore_ascii_case("gzip")),
-            timeout,
+            targets: Signal::ALL.map(target),
             initial_backoff: Duration::from_millis(500),
         }
     }
 
-    /// Send to this URL exactly, such as
+    /// Send every signal to this receiver, at `{endpoint}/v1/{signal}`,
+    /// such as `https://collector.example.com:4318`.
+    pub fn with_endpoint(mut self, endpoint: &str) -> Self {
+        for signal in Signal::ALL {
+            self.targets[signal as usize].url = resolve_url(None, Some(endpoint), signal.name());
+        }
+        self
+    }
+
+    /// Send `signal` to this URL exactly, such as
     /// `https://collector.example.com:4318/v1/traces`.
-    pub fn with_url(mut self, url: impl Into<String>) -> Self {
-        self.url = url.into();
+    pub fn with_url(mut self, signal: Signal, url: impl Into<String>) -> Self {
+        self.targets[signal as usize].url = url.into();
         self
     }
 
     /// Add a header to every request, such as an API key.
     pub fn with_header(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
-        self.headers.push((name.into(), value.into()));
+        let (name, value) = (name.into(), value.into());
+        for target in &mut self.targets {
+            target.headers.push((name.clone(), value.clone()));
+        }
         self
     }
 
     /// Gzip request bodies.
     pub fn with_gzip(mut self, gzip: bool) -> Self {
-        self.gzip = gzip;
+        for target in &mut self.targets {
+            target.gzip = gzip;
+        }
         self
     }
 
     /// Give up on an export, retries included, after this long.
     pub fn with_timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        for target in &mut self.targets {
+            target.timeout = timeout;
+        }
         self
     }
 
@@ -150,17 +300,20 @@ impl OtlpHttpExporterBuilder {
     pub fn build(self) -> OtlpHttpExporter {
         let config = ureq::Agent::config_builder()
             .http_status_as_error(false)
-            .timeout_global(Some(self.timeout))
             .user_agent(concat!("oxtel/", env!("CARGO_PKG_VERSION")))
             .build();
         OtlpHttpExporter {
-            agent: ureq::Agent::new_with_config(config),
-            url: self.url,
-            headers: self.headers,
-            gzip: self.gzip,
-            timeout: self.timeout,
-            initial_backoff: self.initial_backoff,
-            rejected: AtomicU64::new(0),
+            inner: Arc::new(Inner {
+                agent: ureq::Agent::new_with_config(config),
+                targets: self.targets.map(|t| Target {
+                    url: t.url,
+                    headers: t.headers,
+                    gzip: t.gzip,
+                    timeout: t.timeout,
+                    rejected: AtomicU64::new(0),
+                }),
+                initial_backoff: self.initial_backoff,
+            }),
         }
     }
 }
@@ -220,58 +373,30 @@ impl SpanExporter for OtlpHttpExporter {
         if batch.is_empty() {
             return Ok(());
         }
-        let mut body = traces_request(batch, resource).encode_to_vec();
-        if self.gzip {
-            let mut encoder =
-                flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
-            encoder
-                .write_all(&body)
-                .and_then(|()| encoder.finish())
-                .map(|compressed| body = compressed)
-                .map_err(|e| ExportError::Transport(format!("gzip: {e}")))?;
+        self.send(Signal::Traces, &traces_request(batch, resource), |reply| {
+            Some(
+                ExportTraceServiceResponse::decode(reply)
+                    .ok()?
+                    .partial_success?
+                    .rejected_spans,
+            )
+        })
+    }
+}
+
+impl LogExporter for OtlpHttpExporter {
+    fn export(&self, batch: &[LogRecord], resource: &Resource) -> Result<(), ExportError> {
+        if batch.is_empty() {
+            return Ok(());
         }
-        let deadline = Instant::now() + self.timeout;
-        let mut backoff = self.initial_backoff;
-        loop {
-            let (error, wait) = match self.send(&body) {
-                Ok(mut response) => {
-                    let status = response.status().as_u16();
-                    if (200..300).contains(&status) {
-                        let reply = response.body_mut().read_to_vec().unwrap_or_default();
-                        if let Ok(reply) = ExportTraceServiceResponse::decode(reply.as_slice())
-                            && let Some(partial) = reply.partial_success
-                            && partial.rejected_spans > 0
-                        {
-                            self.rejected
-                                .fetch_add(partial.rejected_spans as u64, Ordering::Relaxed);
-                        }
-                        return Ok(());
-                    }
-                    let error = ExportError::Rejected {
-                        status,
-                        message: response
-                            .body_mut()
-                            .read_to_string()
-                            .unwrap_or_default()
-                            .chars()
-                            .take(512)
-                            .collect(),
-                    };
-                    if !retryable(status) {
-                        return Err(error);
-                    }
-                    (error, retry_after(&response))
-                }
-                Err(ureq::Error::Timeout(_)) => (ExportError::Timeout, None),
-                Err(e) => (ExportError::Transport(e.to_string()), None),
-            };
-            let wait = wait.unwrap_or_else(|| jitter(backoff));
-            if Instant::now() + wait >= deadline {
-                return Err(error);
-            }
-            std::thread::sleep(wait);
-            backoff = (backoff * 2).min(Duration::from_secs(5));
-        }
+        self.send(Signal::Logs, &logs_request(batch, resource), |reply| {
+            Some(
+                ExportLogsServiceResponse::decode(reply)
+                    .ok()?
+                    .partial_success?
+                    .rejected_log_records,
+            )
+        })
     }
 }
 

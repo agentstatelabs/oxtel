@@ -1,13 +1,16 @@
 //! The core of [oxtel](https://github.com/agentstatelabs/oxtel):
-//! OpenTelemetry's data model, W3C propagation, and the `tracing` layer that
-//! turns spans into OpenTelemetry spans.
+//! OpenTelemetry's data model, W3C propagation, the `tracing` layers that
+//! turn spans into OpenTelemetry spans and events into log records, and the
+//! `metrics` recorder.
 //!
 //! Most programs use the `oxtel` crate, which sets all of this up from the
 //! standard `OTEL_*` configuration. Use this crate directly to assemble a
 //! pipeline yourself or to write an exporter.
 
 pub mod context;
+pub mod export;
 pub mod id;
+pub mod logs;
 pub mod metrics;
 pub mod propagation;
 pub mod resource;

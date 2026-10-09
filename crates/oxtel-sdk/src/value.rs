@@ -106,3 +106,11 @@ pub(crate) fn upsert(attributes: &mut Vec<KeyValue>, kv: KeyValue) -> bool {
         }
     }
 }
+
+/// An integer that doesn't fit OpenTelemetry's i64 becomes a string.
+pub(crate) fn int_value(fits: Option<i64>, value: impl ToString) -> Value {
+    match fits {
+        Some(v) => Value::I64(v),
+        None => Value::String(value.to_string()),
+    }
+}
