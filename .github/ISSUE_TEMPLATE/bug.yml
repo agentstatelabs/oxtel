@@ -1,0 +1,27 @@
+name: Bug report
+description: Something in oxtel doesn't work as documented or as the OpenTelemetry specification requires.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How to reproduce
+      description: The smallest code or configuration that shows it, and any OTEL_* variables set.
+      render: rust
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: oxtel crates, Rust, OS, and the Collector or backend if one is involved.
+    validations:
+      required: true
+  - type: markdown
+    attributes:
+      value: "Security issues: please don't file them here. Use [private vulnerability reporting](https://github.com/agentstatelabs/oxtel/security/advisories/new)."

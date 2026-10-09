@@ -1,6 +1,6 @@
 # Contributing to oxtel
 
-Thank you for helping. oxtel is early, so the most useful contributions right now are issues: use cases, specification questions, and problems with the [design](DESIGN.md).
+Thank you for helping. Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md). oxtel is early, so the most useful contributions right now are issues: use cases, specification questions, and problems with the [design](DESIGN.md).
 
 ## Sign-off (DCO)
 
