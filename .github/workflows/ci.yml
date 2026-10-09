@@ -29,7 +29,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.94
+      - uses: dtolnay/rust-toolchain@1.120
       - run: cargo check --workspace
 
   # The Prometheus exposition, checked by the tools that consume it:
