@@ -19,6 +19,7 @@ http = ["dep:http"]
 
 [dependencies]
 fastrand = "2.4"
+metrics = "0.24"
 http = { version = "1.4", optional = true }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }

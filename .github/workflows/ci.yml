@@ -31,3 +31,30 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.94
       - run: cargo check --workspace
+
+  # The Prometheus exposition, checked by the tools that consume it:
+  # promtool (parser and lints) for the classic text format, and the strict
+  # OpenMetrics parser from prometheus-client for OpenMetrics.
+  exposition:
+    runs-on: ubuntu-latest
+    env:
+      PROMETHEUS_VERSION: "3.15.0"
+      PROMETHEUS_CLIENT_VERSION: "0.26.0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install promtool (checksum-verified)
+        run: |
+          base="https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}"
+          file="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -fsSLO "${base}/${file}"
+          curl -fsSLO "${base}/sha256sums.txt"
+          grep " ${file}\$" sha256sums.txt | sha256sum -c -
+          tar xzf "${file}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: Classic text format passes promtool
+        run: cargo run -q -p oxtel-prometheus --example exposition -- text | ./promtool check metrics
+      - name: OpenMetrics passes a strict parser
+        run: |
+          python3 -m pip install --quiet "prometheus-client==${PROMETHEUS_CLIENT_VERSION}"
+          cargo run -q -p oxtel-prometheus --example exposition -- openmetrics > openmetrics.txt
+          python3 scripts/check_openmetrics.py openmetrics.txt
