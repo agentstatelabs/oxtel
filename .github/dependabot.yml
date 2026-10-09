@@ -1,0 +1,17 @@
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      opentelemetry-comparison:
+        patterns: ["opentelemetry*", "tracing-opentelemetry"]
+  - package-ecosystem: cargo
+    directory: /fuzz
+    schedule:
+      interval: monthly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly

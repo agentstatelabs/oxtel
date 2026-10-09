@@ -34,6 +34,11 @@ All notable changes to oxtel are recorded here. The format follows
   - A counter's value has its own cache line, and recording skips the exemplar check entirely when exemplars are off. Benchmarking showed cached-handle increments 22% faster and contended ones 24% faster as a result.
   - **Exemplars:** one per histogram bucket, and the latest per counter, linking a measurement to the trace it was made in. `OTEL_METRICS_EXEMPLAR_FILTER` chooses `trace_based` (the default: sampled spans only), `always_on` or `always_off`. Exemplars are skipped, not waited for, under contention.
   - `current_span_context()` is now cheap enough for hot paths, and finds the nearest recorded span when the current one is filtered out of traces.
+- **Ready to be public:**
+  - a README that shows what works, a quick start (`examples/quickstart.rs`, compiled in CI) and the benchmark summary;
+  - the Code of Conduct (Contributor Covenant 2.1, adopted by reference);
+  - issue and pull request templates, and a DCO sign-off check on pull requests;
+  - Dependabot, and CODEOWNERS.
 - **Fuzzing and property tests for every parser of outside input:** `traceparent`, `tracestate`, `baggage`, extraction from carriers, `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_EXPORTER_OTLP_HEADERS`.
   - Property tests (proptest, in `cargo test`) check that no input panics; that valid headers parse and round-trip; that versions above `00` read as `00` and `ff` is rejected; that uppercase and all-zero ids are rejected; that the 32-member and 180-entry limits hold; and that baggage values survive percent-encoding.
   - Coverage-guided fuzz targets (`fuzz/`, cargo-fuzz) check the same invariants, 60 s per target in CI.

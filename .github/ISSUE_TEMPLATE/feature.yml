@@ -1,0 +1,16 @@
+name: Feature request
+description: Something oxtel should do, such as an OpenTelemetry feature, an instrumentation or an exporter.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What you need
+      description: The problem you're solving, and how you'd use this.
+    validations:
+      required: true
+  - type: textarea
+    id: spec
+    attributes:
+      label: Specification
+      description: Links to the OpenTelemetry specification or semantic conventions this relates to, if any.
