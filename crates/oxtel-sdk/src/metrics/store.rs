@@ -362,10 +362,16 @@ struct GaugeCell {
     bits: AtomicU64,
 }
 
+/// Apply `f` to the `f64` stored in `cell`, atomically.
 fn update_f64(cell: &AtomicU64, f: impl Fn(f64) -> f64) {
-    let _ = cell.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
-        Some(f(f64::from_bits(bits)).to_bits())
-    });
+    let mut current = cell.load(Ordering::Relaxed);
+    loop {
+        let next = f(f64::from_bits(current)).to_bits();
+        match cell.compare_exchange_weak(current, next, Ordering::Relaxed, Ordering::Relaxed) {
+            Ok(_) => return,
+            Err(actual) => current = actual,
+        }
+    }
 }
 
 impl GaugeFn for GaugeCell {

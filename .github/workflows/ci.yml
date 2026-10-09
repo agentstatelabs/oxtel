@@ -51,10 +51,18 @@ jobs:
           curl -fsSLO "${base}/sha256sums.txt"
           grep " ${file}\$" sha256sums.txt | sha256sum -c -
           tar xzf "${file}" --strip-components=1 "prometheus-${PROMETHEUS_VERSION}.linux-amd64/promtool"
+      - name: Render both formats
+        shell: bash
+        run: |
+          cargo run -q -p oxtel-prometheus --example exposition -- text > text.txt
+          cargo run -q -p oxtel-prometheus --example exposition -- openmetrics > openmetrics.txt
+          # An empty exposition would pass every check below.
+          test -s text.txt && test -s openmetrics.txt
       - name: Classic text format passes promtool
-        run: cargo run -q -p oxtel-prometheus --example exposition -- text | ./promtool check metrics
+        shell: bash
+        run: ./promtool check metrics < text.txt
       - name: OpenMetrics passes a strict parser
+        shell: bash
         run: |
           python3 -m pip install --quiet "prometheus-client==${PROMETHEUS_CLIENT_VERSION}"
-          cargo run -q -p oxtel-prometheus --example exposition -- openmetrics > openmetrics.txt
           python3 scripts/check_openmetrics.py openmetrics.txt
