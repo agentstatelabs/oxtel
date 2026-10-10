@@ -7,6 +7,8 @@ what it decoded, through the Collector's file exporter:
   remote-parent flag bits, kinds, typed attributes, status, events, links.
 - **Logs** over OTLP/HTTP: severity, body, event name, typed attributes,
   scopes from targets, and the trace and span ids of the enclosing span.
+- **Metrics** pushed over OTLP/HTTP: sums, gauges and histograms, their
+  temporality, units, descriptions and exemplars.
 - **Metrics** scraped by the Collector's Prometheus receiver from oxtel's
   `/metrics` (OpenMetrics): names, types, labels, values, and exemplars that
   carry the trace id.

@@ -8,6 +8,9 @@ use std::time::{Duration, Instant};
 use oxtel_otlp::proto::collector::logs::v1::{
     ExportLogsPartialSuccess, ExportLogsServiceRequest, ExportLogsServiceResponse,
 };
+use oxtel_otlp::proto::collector::metrics::v1::{
+    ExportMetricsPartialSuccess, ExportMetricsServiceRequest, ExportMetricsServiceResponse,
+};
 use oxtel_otlp::proto::collector::trace::v1::{
     ExportTracePartialSuccess, ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
@@ -15,6 +18,9 @@ use oxtel_otlp::proto::common::v1::any_value::Value as AnyValue;
 use oxtel_otlp::{OtlpHttpExporter, Signal};
 use oxtel_sdk::context::TraceFlags;
 use oxtel_sdk::logs::{InMemoryLogExporter, LogExporter, LogRecord, LoggerProvider};
+use oxtel_sdk::metrics::{
+    ExemplarFilter, MeterProvider, MetricExporter, MetricFamily, PeriodicReaderConfig,
+};
 use oxtel_sdk::trace::{
     ExportError, InMemorySpanExporter, Sampler, SpanData, SpanExporter, TracerProvider,
     attach_remote_parent, span_context,
@@ -509,4 +515,219 @@ fn each_signal_takes_its_settings_from_the_environment() {
     );
     assert_eq!(logs.header("x-team"), Some("core"));
     assert_eq!(logs.header("content-encoding"), Some("gzip"));
+}
+
+/// Metrics recorded through the real recorder, inside a sampled span, so
+/// they carry exemplars.
+fn metric_families(meters: &MeterProvider) -> (Vec<MetricFamily>, SpanContext) {
+    let traces = TracerProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_sampler(Sampler::AlwaysOn)
+        .build();
+    let subscriber = tracing_subscriber::registry().with(traces.layer());
+    let cx = tracing::subscriber::with_default(subscriber, || {
+        metrics::with_local_recorder(&meters.recorder(), || {
+            metrics::describe_histogram!(
+                "http.server.request.duration",
+                metrics::Unit::Seconds,
+                "Duration of HTTP server requests."
+            );
+            let span = tracing::info_span!("request");
+            let _entered = span.enter();
+            let h = metrics::histogram!("http.server.request.duration", "http.route" => "/items");
+            h.record(0.012);
+            h.record(0.2);
+            metrics::counter!("jobs.done", "queue" => "email").increment(5);
+            metrics::gauge!("queue.depth").set(7.5);
+            span_context(&span).unwrap()
+        })
+    });
+    (meters.collect(), cx)
+}
+
+fn meter_provider() -> MeterProvider {
+    MeterProvider::builder()
+        .with_resource(resource())
+        .with_exemplar_filter(ExemplarFilter::TraceBased)
+        .build()
+}
+
+fn metric<'a>(
+    request: &'a ExportMetricsServiceRequest,
+    name: &str,
+) -> &'a oxtel_otlp::proto::metrics::v1::Metric {
+    request.resource_metrics[0]
+        .scope_metrics
+        .iter()
+        .flat_map(|s| &s.metrics)
+        .find(|m| m.name == name)
+        .unwrap_or_else(|| panic!("no {name} in {request:?}"))
+}
+
+#[test]
+fn metrics_arrive_as_protobuf_at_v1_metrics() {
+    use oxtel_otlp::proto::metrics::v1::metric::Data;
+    use oxtel_otlp::proto::metrics::v1::number_data_point::Value as Number;
+
+    let (base, seen) = receiver(vec![(200, vec![], vec![])]);
+    let exporter = OtlpHttpExporter::builder().with_endpoint(&base).build();
+    let meters = meter_provider();
+    let (families, cx) = metric_families(&meters);
+    MetricExporter::export(&exporter, &families, &resource()).unwrap();
+
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].path, "/v1/metrics");
+    let request = ExportMetricsServiceRequest::decode(seen[0].body.as_slice()).unwrap();
+    let rm = &request.resource_metrics[0];
+    assert_eq!(
+        string_attr(&rm.resource.as_ref().unwrap().attributes, "service.name"),
+        Some(AnyValue::StringValue("checkout".into()))
+    );
+    assert_eq!(
+        rm.scope_metrics[0].scope.as_ref().unwrap().name,
+        "http_export"
+    );
+
+    let Some(Data::Sum(sum)) = &metric(&request, "jobs.done").data else {
+        panic!("jobs.done isn't a sum");
+    };
+    assert!(sum.is_monotonic);
+    assert_eq!(sum.aggregation_temporality, 2, "CUMULATIVE");
+    let point = &sum.data_points[0];
+    assert_eq!(point.value, Some(Number::AsInt(5)));
+    assert_eq!(
+        string_attr(&point.attributes, "queue"),
+        Some(AnyValue::StringValue("email".into()))
+    );
+    assert!(point.start_time_unix_nano > 0 && point.start_time_unix_nano <= point.time_unix_nano);
+    assert_eq!(point.exemplars[0].trace_id, cx.trace_id.to_bytes());
+    assert_eq!(point.exemplars[0].span_id, cx.span_id.to_bytes());
+
+    let Some(Data::Gauge(gauge)) = &metric(&request, "queue.depth").data else {
+        panic!("queue.depth isn't a gauge");
+    };
+    assert_eq!(gauge.data_points[0].value, Some(Number::AsDouble(7.5)));
+
+    let duration = metric(&request, "http.server.request.duration");
+    assert_eq!(
+        (duration.unit.as_str(), duration.description.as_str()),
+        ("s", "Duration of HTTP server requests.")
+    );
+    let Some(Data::Histogram(histogram)) = &duration.data else {
+        panic!("not a histogram");
+    };
+    assert_eq!(histogram.aggregation_temporality, 2, "CUMULATIVE");
+    let point = &histogram.data_points[0];
+    assert_eq!(point.count, 2);
+    assert!((point.sum.unwrap() - 0.212).abs() < 1e-9);
+    assert_eq!((point.min, point.max), (Some(0.012), Some(0.2)));
+    assert_eq!(
+        point.explicit_bounds.len(),
+        14,
+        "the conventions' duration buckets"
+    );
+    assert_eq!(point.bucket_counts.len(), 15);
+    assert_eq!(point.bucket_counts.iter().sum::<u64>(), 2);
+    assert_eq!(point.exemplars.len(), 2, "one per bucket used");
+    assert!(
+        point
+            .exemplars
+            .iter()
+            .all(|e| e.trace_id == cx.trace_id.to_bytes())
+    );
+}
+
+#[test]
+fn the_overflow_series_is_marked_with_a_boolean() {
+    let meters = MeterProvider::builder()
+        .with_resource(resource())
+        .with_cardinality_limit(2)
+        .build();
+    metrics::with_local_recorder(&meters.recorder(), || {
+        for user in ["a", "b", "c"] {
+            metrics::counter!("logins", "user" => user).increment(1);
+        }
+    });
+    let request = oxtel_otlp::transform::metrics_request(&meters.collect(), &resource());
+    let Some(oxtel_otlp::proto::metrics::v1::metric::Data::Sum(sum)) =
+        &metric(&request, "logins").data
+    else {
+        panic!("not a sum");
+    };
+    let overflow: Vec<_> = sum
+        .data_points
+        .iter()
+        .filter_map(|p| string_attr(&p.attributes, "otel.metric.overflow"))
+        .collect();
+    assert_eq!(overflow, vec![AnyValue::BoolValue(true)]);
+}
+
+#[test]
+fn counters_beyond_i64_become_doubles() {
+    use oxtel_otlp::proto::metrics::v1::number_data_point::Value as Number;
+    let meters = meter_provider();
+    metrics::with_local_recorder(&meters.recorder(), || {
+        metrics::counter!("bytes.total").absolute(u64::MAX);
+    });
+    let request = oxtel_otlp::transform::metrics_request(&meters.collect(), &resource());
+    let Some(oxtel_otlp::proto::metrics::v1::metric::Data::Sum(sum)) =
+        &metric(&request, "bytes.total").data
+    else {
+        panic!("not a sum");
+    };
+    assert_eq!(
+        sum.data_points[0].value,
+        Some(Number::AsDouble(u64::MAX as f64))
+    );
+}
+
+#[test]
+fn partial_success_counts_rejected_data_points() {
+    let reply = ExportMetricsServiceResponse {
+        partial_success: Some(ExportMetricsPartialSuccess {
+            rejected_data_points: 3,
+            error_message: "out of order".into(),
+        }),
+    }
+    .encode_to_vec();
+    let (base, _) = receiver(vec![(200, vec![], reply)]);
+    let exporter = OtlpHttpExporter::builder().with_endpoint(&base).build();
+    let (families, _) = metric_families(&meter_provider());
+    MetricExporter::export(&exporter, &families, &resource()).unwrap();
+    assert_eq!(exporter.rejected(Signal::Metrics), 3);
+}
+
+#[test]
+fn the_meter_provider_pushes_over_otlp() {
+    let (base, seen) = receiver(vec![(200, vec![], vec![]), (200, vec![], vec![])]);
+    let meters = MeterProvider::builder()
+        .with_resource(resource())
+        .with_periodic_exporter_config(
+            OtlpHttpExporter::builder().with_endpoint(&base).build(),
+            PeriodicReaderConfig {
+                interval: Duration::from_secs(3600),
+                timeout: Duration::from_secs(5),
+            },
+        )
+        .build();
+    metrics::with_local_recorder(&meters.recorder(), || {
+        metrics::counter!("jobs.done").increment(1);
+    });
+    meters.force_flush().unwrap();
+    metrics::with_local_recorder(&meters.recorder(), || {
+        metrics::counter!("jobs.done").increment(1);
+    });
+    drop(meters);
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "a flush, then a final export when dropped");
+    let last = ExportMetricsServiceRequest::decode(seen[1].body.as_slice()).unwrap();
+    let Some(oxtel_otlp::proto::metrics::v1::metric::Data::Sum(sum)) =
+        &metric(&last, "jobs.done").data
+    else {
+        panic!("not a sum");
+    };
+    assert_eq!(
+        sum.data_points[0].value,
+        Some(oxtel_otlp::proto::metrics::v1::number_data_point::Value::AsInt(2))
+    );
 }

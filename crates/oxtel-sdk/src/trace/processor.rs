@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::export::{BatchConfig, BatchSink, Batcher, Counters, ExportError, ProcessorStats};
 use crate::resource::Resource;
+use crate::sdk_metrics::ProcessorMetrics;
 use crate::trace::data::SpanData;
 use crate::trace::export::SpanExporter;
 
@@ -67,7 +68,7 @@ impl SpanProcessor for SimpleSpanProcessor {
             self.counters.drop_one();
             return;
         }
-        self.counters.export(1, || {
+        let _ = self.counters.export(1, || {
             self.exporter
                 .export(std::slice::from_ref(&span), &self.resource)
         });
@@ -115,7 +116,15 @@ impl BatchSpanProcessor {
     /// A processor exporting through `exporter` with `config`.
     pub fn new(exporter: impl SpanExporter, resource: Resource, config: BatchConfig) -> Self {
         BatchSpanProcessor {
-            batcher: Batcher::new("oxtel-span-export", config, Sink { exporter, resource }),
+            batcher: Batcher::new(
+                "oxtel-span-export",
+                ProcessorMetrics::new(
+                    "batching_span_processor",
+                    "otel.sdk.processor.span.processed",
+                ),
+                config,
+                Sink { exporter, resource },
+            ),
         }
     }
 }

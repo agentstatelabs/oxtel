@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
+use crate::sdk_metrics::ProcessorMetrics;
+
 /// Why an export failed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ExportError {
@@ -73,12 +75,18 @@ impl Counters {
     }
 
     /// Run one export of `n` items with oxtel's own telemetry suppressed,
-    /// and count how it went.
-    pub(crate) fn export(&self, n: usize, export: impl FnOnce() -> Result<(), ExportError>) {
-        match crate::suppress(export) {
+    /// count how it went, and return its result.
+    pub(crate) fn export(
+        &self,
+        n: usize,
+        export: impl FnOnce() -> Result<(), ExportError>,
+    ) -> Result<(), ExportError> {
+        let result = crate::suppress(export);
+        match result {
             Ok(()) => self.exported.fetch_add(n as u64, Ordering::Relaxed),
             Err(_) => self.export_failed.fetch_add(n as u64, Ordering::Relaxed),
         };
+        result
     }
 }
 
@@ -172,24 +180,34 @@ pub(crate) struct Batcher<T: Send + 'static> {
     worker: Mutex<Option<JoinHandle<()>>>,
     shut_down: AtomicBool,
     counters: Arc<Counters>,
+    metrics: Arc<ProcessorMetrics>,
     timeout: Duration,
 }
 
 impl<T: Send + 'static> Batcher<T> {
-    pub(crate) fn new(thread: &str, config: BatchConfig, sink: impl BatchSink<T>) -> Self {
+    pub(crate) fn new(
+        thread: &str,
+        metrics: ProcessorMetrics,
+        config: BatchConfig,
+        sink: impl BatchSink<T>,
+    ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(config.max_queue_size.max(1));
         let counters = Arc::new(Counters::default());
-        let worker_counters = Arc::clone(&counters);
+        let metrics = Arc::new(metrics);
+        let (worker_counters, worker_metrics) = (Arc::clone(&counters), Arc::clone(&metrics));
         let timeout = config.export_timeout;
         let worker = std::thread::Builder::new()
             .name(thread.into())
-            .spawn(move || crate::suppress(|| run(receiver, sink, config, &worker_counters)))
+            .spawn(move || {
+                crate::suppress(|| run(receiver, sink, config, &worker_counters, &worker_metrics))
+            })
             .expect("spawn an export thread");
         Batcher {
             sender,
             worker: Mutex::new(Some(worker)),
             shut_down: AtomicBool::new(false),
             counters,
+            metrics,
             timeout,
         }
     }
@@ -198,12 +216,18 @@ impl<T: Send + 'static> Batcher<T> {
     pub(crate) fn push(&self, item: T) {
         if self.shut_down.load(Ordering::Relaxed) {
             self.counters.drop_one();
+            self.metrics.dropped("shutdown");
             return;
         }
         match self.sender.try_send(Message::Item(Box::new(item))) {
             Ok(()) => {}
-            Err(TrySendError::Full(_) | TrySendError::Disconnected(_)) => {
+            Err(TrySendError::Full(_)) => {
                 self.counters.drop_one();
+                self.metrics.dropped("queue_full");
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.counters.drop_one();
+                self.metrics.dropped("shutdown");
             }
         }
     }
@@ -258,12 +282,14 @@ fn run<T>(
     sink: impl BatchSink<T>,
     config: BatchConfig,
     counters: &Counters,
+    metrics: &ProcessorMetrics,
 ) {
     let mut batch: Vec<T> = Vec::with_capacity(config.max_export_batch_size);
     let mut deadline = Instant::now() + config.scheduled_delay;
     let flush = |batch: &mut Vec<T>| {
         for chunk in batch.chunks(config.max_export_batch_size) {
-            counters.export(chunk.len(), || sink.export(chunk));
+            metrics.handed_over(chunk.len());
+            let _ = counters.export(chunk.len(), || sink.export(chunk));
         }
         batch.clear();
     };

@@ -6,6 +6,7 @@ use crate::export::{BatchConfig, BatchSink, Batcher, Counters, ExportError, Proc
 use crate::logs::data::LogRecord;
 use crate::logs::export::LogExporter;
 use crate::resource::Resource;
+use crate::sdk_metrics::ProcessorMetrics;
 
 /// Receives log records as they're emitted.
 pub trait LogProcessor: Send + Sync + 'static {
@@ -66,7 +67,7 @@ impl LogProcessor for SimpleLogProcessor {
             self.counters.drop_one();
             return;
         }
-        self.counters.export(1, || {
+        let _ = self.counters.export(1, || {
             self.exporter
                 .export(std::slice::from_ref(&record), &self.resource)
         });
@@ -114,7 +115,12 @@ impl BatchLogProcessor {
     /// A processor exporting through `exporter` with `config`.
     pub fn new(exporter: impl LogExporter, resource: Resource, config: BatchConfig) -> Self {
         BatchLogProcessor {
-            batcher: Batcher::new("oxtel-log-export", config, Sink { exporter, resource }),
+            batcher: Batcher::new(
+                "oxtel-log-export",
+                ProcessorMetrics::new("batching_log_processor", "otel.sdk.processor.log.processed"),
+                config,
+                Sink { exporter, resource },
+            ),
         }
     }
 }

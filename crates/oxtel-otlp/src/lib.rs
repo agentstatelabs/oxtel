@@ -1,12 +1,13 @@
 //! OTLP exporters for [oxtel](https://github.com/agentstatelabs/oxtel).
 //!
-//! [`OtlpHttpExporter`] sends spans and log records over OTLP/HTTP with
-//! protobuf bodies, to an OpenTelemetry Collector or any backend that
+//! [`OtlpHttpExporter`] sends spans, metrics and log records over OTLP/HTTP
+//! with protobuf bodies, to an OpenTelemetry Collector or any backend that
 //! accepts OTLP. One exporter, cloned, serves every pipeline:
 //!
 //! ```no_run
 //! use oxtel_otlp::OtlpHttpExporter;
 //! use oxtel_sdk::logs::LoggerProvider;
+//! use oxtel_sdk::metrics::MeterProvider;
 //! use oxtel_sdk::trace::TracerProvider;
 //! use tracing_subscriber::layer::SubscriberExt;
 //!
@@ -16,7 +17,11 @@
 //! let traces = TracerProvider::builder()
 //!     .with_batch_exporter(otlp.clone())
 //!     .build();
-//! let logs = LoggerProvider::builder().with_batch_exporter(otlp).build();
+//! let logs = LoggerProvider::builder()
+//!     .with_batch_exporter(otlp.clone())
+//!     .build();
+//! let meters = MeterProvider::builder().with_periodic_exporter(otlp).build();
+//! metrics::set_global_recorder(meters.recorder()).unwrap();
 //! tracing::subscriber::set_global_default(
 //!     tracing_subscriber::registry()
 //!         .with(traces.layer())

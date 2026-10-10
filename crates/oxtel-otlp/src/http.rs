@@ -8,12 +8,15 @@ use std::time::{Duration, Instant};
 use oxtel_sdk::Resource;
 use oxtel_sdk::export::ExportError;
 use oxtel_sdk::logs::{LogExporter, LogRecord};
+use oxtel_sdk::metrics::{MetricExporter, MetricFamily};
+use oxtel_sdk::sdk_metrics::ExporterMetrics;
 use oxtel_sdk::trace::{SpanData, SpanExporter};
 use prost::Message;
 
 use crate::proto::collector::logs::v1::ExportLogsServiceResponse;
+use crate::proto::collector::metrics::v1::ExportMetricsServiceResponse;
 use crate::proto::collector::trace::v1::ExportTraceServiceResponse;
-use crate::transform::{logs_request, traces_request};
+use crate::transform::{logs_request, metrics_request, traces_request};
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:4318";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,6 +44,19 @@ impl Signal {
         }
     }
 
+    /// oxtel's own metrics for this signal's exporter: its component type,
+    /// and the count it records.
+    fn sdk_metrics(self) -> (&'static str, &'static str) {
+        match self {
+            Signal::Traces => ("otlp_http_span_exporter", "otel.sdk.exporter.span.exported"),
+            Signal::Metrics => (
+                "otlp_http_metric_exporter",
+                "otel.sdk.exporter.metric_data_point.exported",
+            ),
+            Signal::Logs => ("otlp_http_log_exporter", "otel.sdk.exporter.log.exported"),
+        }
+    }
+
     fn env(self) -> &'static str {
         match self {
             Signal::Traces => "TRACES",
@@ -51,7 +67,8 @@ impl Signal {
 }
 
 /// Exports to an OTLP/HTTP receiver, such as an OpenTelemetry Collector:
-/// spans to `{endpoint}/v1/traces` and log records to `{endpoint}/v1/logs`.
+/// spans to `{endpoint}/v1/traces`, metrics to `{endpoint}/v1/metrics` and
+/// log records to `{endpoint}/v1/logs`.
 /// Clones share one connection pool, so one exporter can serve every
 /// pipeline.
 ///
@@ -76,6 +93,7 @@ struct Target {
     gzip: bool,
     timeout: Duration,
     rejected: AtomicU64,
+    metrics: ExporterMetrics,
 }
 
 impl OtlpHttpExporter {
@@ -89,24 +107,46 @@ impl OtlpHttpExporter {
         &self.inner.targets[signal as usize].url
     }
 
-    /// Items of `signal` (spans, log records) that the receiver accepted
-    /// the request for but rejected, as reported in partial-success
-    /// responses.
+    /// Items of `signal` (spans, data points, log records) that the
+    /// receiver accepted the request for but rejected, as reported in
+    /// partial-success responses.
     pub fn rejected(&self, signal: Signal) -> u64 {
         self.inner.targets[signal as usize]
             .rejected
             .load(Ordering::Relaxed)
     }
 
-    /// Send `message` for `signal`, retrying as the specification allows.
-    /// `rejected_in` reads the rejected count from a success response.
+    /// Send `message`, carrying `items` of `signal`, retrying as the
+    /// specification allows. `rejected_in` reads the rejected count from a
+    /// success response.
     fn send(
         &self,
         signal: Signal,
+        items: usize,
         message: &impl Message,
         rejected_in: impl Fn(&[u8]) -> Option<i64>,
     ) -> Result<(), ExportError> {
         let target = &self.inner.targets[signal as usize];
+        let started = Instant::now();
+        let mut status = None;
+        let mut rejected = 0;
+        let result = self.deliver(target, message, &rejected_in, &mut status, &mut rejected);
+        target
+            .metrics
+            .record(items, rejected, &result, started.elapsed(), status);
+        result
+    }
+
+    /// The retry loop of [`send`](Self::send). Leaves the last HTTP status
+    /// and the rejected count in `status` and `rejected`.
+    fn deliver(
+        &self,
+        target: &Target,
+        message: &impl Message,
+        rejected_in: &impl Fn(&[u8]) -> Option<i64>,
+        status: &mut Option<u16>,
+        rejected: &mut usize,
+    ) -> Result<(), ExportError> {
         let mut body = message.encode_to_vec();
         if target.gzip {
             let mut encoder =
@@ -123,18 +163,20 @@ impl OtlpHttpExporter {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let (error, wait) = match self.post(target, &body, remaining) {
                 Ok(mut response) => {
-                    let status = response.status().as_u16();
-                    if (200..300).contains(&status) {
+                    let code = response.status().as_u16();
+                    *status = Some(code);
+                    if (200..300).contains(&code) {
                         let reply = response.body_mut().read_to_vec().unwrap_or_default();
                         if let Some(n) = rejected_in(&reply)
                             && n > 0
                         {
                             target.rejected.fetch_add(n as u64, Ordering::Relaxed);
+                            *rejected = usize::try_from(n).unwrap_or(usize::MAX);
                         }
                         return Ok(());
                     }
                     let error = ExportError::Rejected {
-                        status,
+                        status: code,
                         message: response
                             .body_mut()
                             .read_to_string()
@@ -143,7 +185,7 @@ impl OtlpHttpExporter {
                             .take(512)
                             .collect(),
                     };
-                    if !retryable(status) {
+                    if !retryable(code) {
                         return Err(error);
                     }
                     (error, retry_after(&response))
@@ -305,12 +347,22 @@ impl OtlpHttpExporterBuilder {
         OtlpHttpExporter {
             inner: Arc::new(Inner {
                 agent: ureq::Agent::new_with_config(config),
-                targets: self.targets.map(|t| Target {
-                    url: t.url,
-                    headers: t.headers,
-                    gzip: t.gzip,
-                    timeout: t.timeout,
-                    rejected: AtomicU64::new(0),
+                targets: Signal::ALL.map(|signal| {
+                    let t = &self.targets[signal as usize];
+                    let (kind, exported) = signal.sdk_metrics();
+                    let server = server(&t.url);
+                    Target {
+                        url: t.url.clone(),
+                        headers: t.headers.clone(),
+                        gzip: t.gzip,
+                        timeout: t.timeout,
+                        rejected: AtomicU64::new(0),
+                        metrics: ExporterMetrics::new(
+                            kind,
+                            exported,
+                            server.as_ref().map(|(host, port)| (host.as_str(), *port)),
+                        ),
+                    }
                 }),
                 initial_backoff: self.initial_backoff,
             }),
@@ -326,6 +378,33 @@ pub fn resolve_url(signal_endpoint: Option<&str>, endpoint: Option<&str>, signal
         (None, Some(base)) => format!("{}/v1/{signal}", base.trim().trim_end_matches('/')),
         (None, None) => format!("{DEFAULT_ENDPOINT}/v1/{signal}"),
     }
+}
+
+/// The host and port of an `http(s)://host[:port]/...` URL, for oxtel's own
+/// metrics. User information in the URL is left out.
+fn server(url: &str) -> Option<(String, u16)> {
+    let (scheme, rest) = url.trim().split_once("://")?;
+    let authority = rest.split(['/', '?', '#']).next()?;
+    let authority = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "https" => 443,
+        "http" => 80,
+        _ => return None,
+    };
+    let (host, port) = match authority.strip_prefix('[') {
+        Some(v6) => {
+            let (host, after) = v6.split_once(']')?;
+            (host, after.strip_prefix(':'))
+        }
+        None => match authority.rsplit_once(':') {
+            Some((host, port)) => (host, Some(port)),
+            None => (authority, None),
+        },
+    };
+    let port = port.map_or(Some(default), |p| p.parse().ok())?;
+    (!host.is_empty()).then(|| (host.to_string(), port))
 }
 
 /// `key1=value1,key2=value2`, values percent-decoded. Malformed pairs are
@@ -373,14 +452,19 @@ impl SpanExporter for OtlpHttpExporter {
         if batch.is_empty() {
             return Ok(());
         }
-        self.send(Signal::Traces, &traces_request(batch, resource), |reply| {
-            Some(
-                ExportTraceServiceResponse::decode(reply)
-                    .ok()?
-                    .partial_success?
-                    .rejected_spans,
-            )
-        })
+        self.send(
+            Signal::Traces,
+            batch.len(),
+            &traces_request(batch, resource),
+            |reply| {
+                Some(
+                    ExportTraceServiceResponse::decode(reply)
+                        .ok()?
+                        .partial_success?
+                        .rejected_spans,
+                )
+            },
+        )
     }
 }
 
@@ -389,14 +473,41 @@ impl LogExporter for OtlpHttpExporter {
         if batch.is_empty() {
             return Ok(());
         }
-        self.send(Signal::Logs, &logs_request(batch, resource), |reply| {
-            Some(
-                ExportLogsServiceResponse::decode(reply)
-                    .ok()?
-                    .partial_success?
-                    .rejected_log_records,
-            )
-        })
+        self.send(
+            Signal::Logs,
+            batch.len(),
+            &logs_request(batch, resource),
+            |reply| {
+                Some(
+                    ExportLogsServiceResponse::decode(reply)
+                        .ok()?
+                        .partial_success?
+                        .rejected_log_records,
+                )
+            },
+        )
+    }
+}
+
+impl MetricExporter for OtlpHttpExporter {
+    fn export(&self, metrics: &[MetricFamily], resource: &Resource) -> Result<(), ExportError> {
+        if metrics.iter().all(|m| m.points.is_empty()) {
+            return Ok(());
+        }
+        let points = metrics.iter().map(|m| m.points.len()).sum();
+        self.send(
+            Signal::Metrics,
+            points,
+            &metrics_request(metrics, resource),
+            |reply| {
+                Some(
+                    ExportMetricsServiceResponse::decode(reply)
+                        .ok()?
+                        .partial_success?
+                        .rejected_data_points,
+                )
+            },
+        )
     }
 }
 
@@ -428,6 +539,31 @@ mod tests {
             ),
             "https://c.example/custom"
         );
+    }
+
+    #[test]
+    fn servers_are_read_from_urls_without_credentials() {
+        let host = |url: &str| server(url).map(|(h, p)| format!("{h}:{p}"));
+        assert_eq!(
+            host("http://c.example:4318/v1/traces").as_deref(),
+            Some("c.example:4318")
+        );
+        assert_eq!(
+            host("https://c.example/v1/logs").as_deref(),
+            Some("c.example:443")
+        );
+        assert_eq!(host("http://c.example").as_deref(), Some("c.example:80"));
+        assert_eq!(
+            host("http://user:secret@c.example:9/x").as_deref(),
+            Some("c.example:9")
+        );
+        assert_eq!(
+            host("http://[::1]:4318/v1/metrics").as_deref(),
+            Some("::1:4318")
+        );
+        assert_eq!(host("http://[::1]/").as_deref(), Some("::1:80"));
+        assert_eq!(host("unix:///run/otel.sock"), None);
+        assert_eq!(host("http://c.example:port/"), None);
     }
 
     #[test]

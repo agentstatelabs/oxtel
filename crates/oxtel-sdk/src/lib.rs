@@ -14,6 +14,7 @@ pub mod logs;
 pub mod metrics;
 pub mod propagation;
 pub mod resource;
+pub mod sdk_metrics;
 pub mod trace;
 pub mod value;
 
