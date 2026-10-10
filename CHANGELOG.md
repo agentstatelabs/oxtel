@@ -17,6 +17,16 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **Resource detection** (`oxtel_sdk::resource`). The default resource now describes where the process runs. What's detected ranks below `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME` and the builder.
+  - `service.instance.id`: a random UUID per process start.
+  - `host.name`, `host.arch` and, on Linux, `host.id` (the machine id).
+  - `os.type` and, on Linux, `os.name`, `os.version` and `os.description` from os-release.
+  - `process.pid`, `process.parent_pid`, `process.executable.name` and `.path`. The command line isn't recorded; it may carry secrets.
+  - `container.id` from `/proc/self/cgroup`, as Docker, containerd, CRI-O and Podman name it under cgroup v1 or v2, or from `/proc/self/mountinfo` when a cgroup namespace hides it.
+  - Inside Kubernetes: `k8s.namespace.name` from the service account, `k8s.pod.name`, `k8s.pod.uid` from the cgroup path, and `k8s.node.name` from `K8S_NODE_NAME`.
+  - Detectors read files and the environment only, never spawning processes or calling the C library. `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS` (`service`, `host`, `os`, `process`, `container`, `k8s`, or `none`) chooses which run.
+  - `ResourceBuilder::with_detector` and the facade's `with_resource_detector` add a detector of your own, such as a cloud provider's.
+  - `without_env()` now also skips detection, so a resource built that way is exactly what the code says.
 - **`oxtel-rmcp`: MCP instrumentation for rmcp**, following the OpenTelemetry MCP conventions (development status).
   - `Instrumented::new(server)` wraps any rmcp server. Each request and notification gets a span named `{mcp.method.name} {target}` (`tools/call commit`), continuing the caller's trace from W3C keys in `params._meta`.
   - Span attributes: `mcp.method.name`, `jsonrpc.request.id`, `mcp.protocol.version`, `gen_ai.tool.name` with `gen_ai.operation.name` `execute_tool`, `gen_ai.prompt.name`, `mcp.resource.uri` and `network.transport`. Over HTTP, also `mcp.session.id` and `network.protocol.*`.

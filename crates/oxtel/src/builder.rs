@@ -9,6 +9,7 @@ use oxtel_prometheus::{PrometheusExporter, PrometheusServer};
 use oxtel_sdk::console::ConsoleExporter;
 use oxtel_sdk::logs::{LocalFormat, LocalLayer, LoggerProvider, LoggerProviderBuilder};
 use oxtel_sdk::metrics::{MeterProvider, MeterProviderBuilder, MetricsRecorder};
+use oxtel_sdk::resource::Detector;
 use oxtel_sdk::trace::{Sampler, TracerProvider, TracerProviderBuilder};
 use oxtel_sdk::{KeyValue, Resource};
 use tracing::Dispatch;
@@ -66,6 +67,7 @@ type Hook<B> = Box<dyn FnOnce(B) -> B>;
 pub struct Builder {
     default_service_name: Option<String>,
     attributes: Vec<KeyValue>,
+    detectors: Vec<Box<dyn Detector>>,
     resource: Option<Resource>,
     sampler: Option<Sampler>,
     traces_filter: Option<String>,
@@ -88,6 +90,7 @@ impl Default for Builder {
         Builder {
             default_service_name: None,
             attributes: Vec::new(),
+            detectors: Vec::new(),
             resource: None,
             sampler: None,
             traces_filter: None,
@@ -121,8 +124,16 @@ impl Builder {
         self
     }
 
-    /// Use exactly this resource, ignoring the environment's and the two
-    /// settings above.
+    /// Detect more resource attributes, such as a cloud provider's, after
+    /// the built-in detectors (which `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS`
+    /// chooses).
+    pub fn with_resource_detector(mut self, detector: impl Detector + 'static) -> Self {
+        self.detectors.push(Box::new(detector));
+        self
+    }
+
+    /// Use exactly this resource, ignoring the environment, the detectors
+    /// and the settings above.
     pub fn with_resource(mut self, resource: Resource) -> Self {
         self.resource = Some(resource);
         self
@@ -262,6 +273,9 @@ impl Builder {
             }
             for kv in self.attributes {
                 b = b.with_attribute(kv);
+            }
+            for detector in self.detectors {
+                b = b.with_boxed_detector(detector);
             }
             b.build()
         });
