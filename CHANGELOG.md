@@ -6,6 +6,10 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Nothing is exported until it's configured.** `oxtel::init()` used to send traces, metrics and logs to `localhost:4318` when no variable was set, as the specification's defaults say. Now a signal exports over OTLP once `OTEL_EXPORTER_OTLP_ENDPOINT` or its own endpoint is set, or when `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` names `otlp`, which still means `localhost:4318` by default. A program that relied on the old default sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. Configuration files are unchanged.
+- With no log pipeline and no span exporter, events are no longer kept as span events that nothing would export.
+
 ## [0.1.0] - 2026-10-10
 
 The first release. oxtel turns what Rust code already records with `tracing` and `metrics` into standard OpenTelemetry output: traces, metrics and logs over OTLP/HTTP, Prometheus and OpenMetrics scrapes, and local text or JSON logs. One call, `oxtel::init()`, sets it up from the standard `OTEL_*` variables or a declarative configuration file. Ready-made instrumentation covers HTTP (tower, axum, hyper) and MCP (rmcp).

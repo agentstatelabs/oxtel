@@ -334,10 +334,12 @@ impl Builder {
         });
 
         // Events become log records when there's a log pipeline, and span
-        // events when there isn't, so they aren't lost.
+        // events when there isn't, so they aren't lost. With no span
+        // exporter either, there's nowhere for span events to go.
+        let spans_go_somewhere = !span_processors.is_empty() || !self.trace_hooks.is_empty();
         let mut b = TracerProvider::builder()
             .with_resource(resource.clone())
-            .with_span_events(logs.is_none());
+            .with_span_events(logs.is_none() && spans_go_somewhere);
         if let Some(sampler) = sampler {
             b = b.with_sampler(sampler);
         }

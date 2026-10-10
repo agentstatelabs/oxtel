@@ -1,11 +1,11 @@
 //! oxtel in one call: traces, metrics and logs, configured by the standard
 //! `OTEL_*` variables.
 //!
-//! With an OpenTelemetry Collector on localhost:4318 (or wherever
-//! `OTEL_EXPORTER_OTLP_ENDPOINT` points), everything arrives there:
+//! Point it at an OpenTelemetry Collector and everything arrives there:
 //!
 //! ```bash
-//! cargo run -p oxtel-examples --example quickstart
+//! OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 \
+//!   cargo run -p oxtel-examples --example quickstart
 //! ```
 //!
 //! Without one, print it instead:
