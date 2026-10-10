@@ -26,6 +26,8 @@ jobs:
       # Features the workspace build leaves off.
       - run: cargo clippy -p oxtel-tower --all-targets --features axum
       - run: cargo test -p oxtel-tower --features axum
+      - run: cargo clippy -p oxtel-rmcp --all-targets --features client
+      - run: cargo test -p oxtel-rmcp --features client
       - run: cargo doc --workspace --no-deps
 
   msrv:
