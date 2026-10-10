@@ -16,7 +16,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -28,7 +28,7 @@ jobs:
   msrv:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.94
       - run: cargo check --workspace
 
@@ -41,7 +41,7 @@ jobs:
       PROMETHEUS_VERSION: "3.15.0"
       PROMETHEUS_CLIENT_VERSION: "0.26.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Install promtool (checksum-verified)
         run: |
@@ -75,7 +75,7 @@ jobs:
     env:
       COLLECTOR_VERSION: "0.161.0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Build the conformance tests
         run: cargo test -p oxtel-conformance --no-run
@@ -107,7 +107,7 @@ jobs:
     env:
       CARGO_FUZZ_VERSION: "0.13.2"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@nightly
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked --version "${CARGO_FUZZ_VERSION}"
