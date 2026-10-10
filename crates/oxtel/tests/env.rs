@@ -1,0 +1,142 @@
+//! `oxtel::init()` driven by real environment variables, each case in a
+//! child process: the environment is process-wide, setting it is `unsafe`,
+//! and `init` installs global state.
+
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::process::{Command, Output};
+
+const CHILD: &str = "OXTEL_TEST_CHILD";
+
+/// Run test `name` in a child process with `vars` set.
+fn child(name: &str, vars: &[(&str, &str)]) -> Output {
+    let mut command = Command::new(std::env::current_exe().unwrap());
+    command
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1");
+    for var in [
+        "RUST_LOG",
+        "OTEL_SDK_DISABLED",
+        "OTEL_TRACES_EXPORTER",
+        "OTEL_METRICS_EXPORTER",
+        "OTEL_LOGS_EXPORTER",
+        "OTEL_SERVICE_NAME",
+        "OTEL_RESOURCE_ATTRIBUTES",
+    ] {
+        command.env_remove(var);
+    }
+    for (k, v) in vars {
+        command.env(k, v);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "child {name} failed:\n{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    output
+}
+
+fn in_child() -> bool {
+    std::env::var_os(CHILD).is_some()
+}
+
+fn scrape(port: u16) -> String {
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).unwrap();
+    stream
+        .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut response = String::new();
+    stream.read_to_string(&mut response).unwrap();
+    response
+}
+
+#[test]
+fn the_environment_chooses_the_exporters() {
+    if in_child() {
+        let guard = oxtel::init().expect("install");
+        let port = guard.prometheus_addr().expect("the endpoint runs").port();
+        tracing::info_span!("request", otel.kind = "server").in_scope(|| {
+            tracing::warn!(key = "items", "slow lookup");
+            metrics::counter!("requests.handled").increment(2);
+        });
+        let response = scrape(port);
+        assert!(response.contains("requests_handled_total"), "{response}");
+        assert!(response.contains("service_name=\"env-test\""), "{response}");
+        guard.shutdown().unwrap();
+        return;
+    }
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let output = child(
+        "the_environment_chooses_the_exporters",
+        &[
+            ("OTEL_TRACES_EXPORTER", "console,zipkin"),
+            ("OTEL_LOGS_EXPORTER", "console"),
+            ("OTEL_METRICS_EXPORTER", "prometheus"),
+            ("OTEL_EXPORTER_PROMETHEUS_HOST", "127.0.0.1"),
+            ("OTEL_EXPORTER_PROMETHEUS_PORT", &port),
+            ("OTEL_SERVICE_NAME", "env-test"),
+        ],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(" span \"request\" kind=server"),
+        "the span on the console:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(" WARN env: slow lookup key=items trace_id="),
+        "the event as a log record with its span's ids:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(" WARN oxtel: OTEL_TRACES_EXPORTER=zipkin isn't supported; ignored"),
+        "the unsupported exporter reported through the pipeline:\n{stdout}"
+    );
+}
+
+#[test]
+fn otel_sdk_disabled_turns_everything_off() {
+    if in_child() {
+        let guard = oxtel::init().expect("install");
+        assert!(guard.tracer_provider().is_none());
+        assert!(guard.logger_provider().is_none());
+        assert!(guard.meter_provider().is_none());
+        tracing::info_span!("request").in_scope(|| tracing::warn!("nobody hears this"));
+        metrics::counter!("requests.handled").increment(1);
+        return;
+    }
+    let output = child(
+        "otel_sdk_disabled_turns_everything_off",
+        &[
+            ("OTEL_SDK_DISABLED", "true"),
+            ("OTEL_TRACES_EXPORTER", "console"),
+            ("OTEL_LOGS_EXPORTER", "console"),
+        ],
+    );
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("nobody hears this"));
+}
+
+#[test]
+fn init_refuses_to_replace_another_subscriber() {
+    if in_child() {
+        tracing::subscriber::set_global_default(tracing_subscriber::registry()).unwrap();
+        assert_eq!(
+            oxtel::init().err(),
+            Some(oxtel::Error::SubscriberAlreadySet)
+        );
+        return;
+    }
+    child(
+        "init_refuses_to_replace_another_subscriber",
+        &[
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_METRICS_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
+}

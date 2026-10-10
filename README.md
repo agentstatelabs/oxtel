@@ -8,69 +8,55 @@ Rust code already records spans, logs and metrics with `tracing` and `metrics`. 
 
 ## Quick start
 
-Abridged from [`examples/quickstart.rs`](examples/quickstart.rs), which CI compiles. Run it with `cargo run -p oxtel-examples --example quickstart`.
+oxtel isn't on crates.io yet; 0.1 is planned for the end of Phase 1. The quick start is [`examples/quickstart.rs`](examples/quickstart.rs), which CI compiles:
 
 ```rust
-use oxtel_otlp::OtlpHttpExporter;
-use oxtel_prometheus::PrometheusExporter;
-use oxtel_sdk::Resource;
-use oxtel_sdk::logs::LoggerProvider;
-use oxtel_sdk::metrics::MeterProvider;
-use oxtel_sdk::trace::TracerProvider;
-use tracing_subscriber::layer::SubscriberExt;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Traces, metrics and logs, configured by the standard OTEL_* variables.
+    // Keep the guard alive: dropping it exports what's pending.
+    let _telemetry = oxtel::builder()
+        .with_default_service_name("checkout")
+        .install()?;
 
-// Service name, resource attributes and sampler come from the standard
-// OTEL_* variables; this name applies unless OTEL_SERVICE_NAME is set.
-let resource = Resource::builder().with_default_service_name("quickstart").build();
-
-// One OTLP/HTTP exporter, configured by OTEL_EXPORTER_OTLP_*, serves
-// traces and logs. Events go out as log records carrying their span's ids.
-let otlp = OtlpHttpExporter::builder().build();
-let traces = TracerProvider::builder()
-    .with_resource(resource.clone())
-    .with_span_events(false)
-    .with_batch_exporter(otlp.clone())
-    .build();
-let logs = LoggerProvider::builder()
-    .with_resource(resource.clone())
-    .with_batch_exporter(otlp)
-    .build();
-tracing::subscriber::set_global_default(
-    tracing_subscriber::registry().with(traces.layer()).with(logs.layer()),
-)?;
-
-// Metrics: the `metrics` macros, recorded by oxtel.
-let meters = MeterProvider::builder().build();
-metrics::set_global_recorder(meters.recorder())?;
-
-// Your code, instrumented as usual.
-let span = tracing::info_span!("request", otel.kind = "server", http.route = "/items");
-let _entered = span.enter();
-tracing::info!(items = 3, "listed");
-metrics::histogram!("http.server.request.duration", "http.route" => "/items").record(0.042);
-
-// What a Prometheus scrape gets: OpenMetrics, with exemplars linking each
-// histogram bucket to the trace that recorded it.
-let (content_type, body) = PrometheusExporter::new(meters, resource)
-    .render(Some("application/openmetrics-text"));
+    // Your code, instrumented as usual.
+    let span = tracing::info_span!("request", otel.kind = "server", http.route = "/items");
+    let _entered = span.enter();
+    tracing::info!(items = 3, "listed");
+    metrics::histogram!("http.server.request.duration", "http.route" => "/items").record(0.042);
+    Ok(())
+}
 ```
+
+By default everything goes over OTLP/HTTP to `localhost:4318`. The environment chooses otherwise:
+
+| Variable | Choices |
+|---|---|
+| `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (default), `console`, `none` |
+| `OTEL_METRICS_EXPORTER` | `otlp` (default), `prometheus` (serves `/metrics` on port 9464), `console`, `none` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `_HEADERS`, `_COMPRESSION`, `_TIMEOUT` | where and how OTLP is sent, for all signals or each one |
+| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | the resource |
+| `OTEL_SDK_DISABLED` | `true` turns it all off |
+| `RUST_LOG` | which spans and events are recorded (`info` by default) |
+
+Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=console OTEL_METRICS_EXPORTER=console cargo run -p oxtel-examples --example quickstart`. To assemble the pipelines yourself, as a distribution might, see [`examples/manual.rs`](examples/manual.rs).
 
 ## What works today
 
 | | |
 |---|---|
+| **Setup** | `oxtel::init()` builds every pipeline from the standard environment and installs it. A builder adds resource attributes, filters, layers of your own, and hooks into each pipeline for extra exporters. Settings oxtel can't honour are logged as warnings rather than failing. Shutdown flushes every pipeline at once, within a deadline. |
 | **Traces** | A `tracing` layer: span fields become attributes; `otel.name`, `otel.kind` and `otel.status_*` set the name, kind and status; events become span events. Sampling is decided when a span starts, and unsampled spans keep their ids. Batch export never blocks the program: when it's overloaded, it drops spans and counts them. |
 | **Logs** | A `tracing` layer: each event becomes a log record. The level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. Inside a span, the record carries the span's trace and span ids, sampled or not. Events from the `log` crate, forwarded by `tracing-log`, keep their target. |
 | **Metrics** | A `metrics` recorder: counters, gauges, histograms, pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` or scraped by Prometheus, or both. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
 | **OTLP** | Traces, metrics and logs over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
-| **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. |
+| **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. Serve it from your own HTTP server, or from oxtel's built-in endpoint. |
+| **Console** | Readable lines on standard output for spans, log records and metrics, for development. |
 | **Propagation** | W3C Trace Context and Baggage, parsed strictly. |
-| **Configuration** | The standard `OTEL_*` variables for the resource, sampler, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, metric export interval and timeout, and each signal's OTLP endpoint, headers, compression and timeout. |
+| **Configuration** | The standard `OTEL_*` variables: `OTEL_SDK_DISABLED`, each signal's exporter, the resource, sampler, propagators, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, the metric export interval and timeout, the Prometheus endpoint, and each signal's OTLP endpoint, headers, compression and timeout. |
 | **Self-observability** | When turned on, oxtel's own pipelines report what they did as `otel.sdk.*` metrics, named by the semantic conventions: items processed, dropped (and why), exported and rejected, and how long exports and collections take. |
 
 **Coming next (Phase 1):**
-- one-call setup;
 - declarative configuration (`OTEL_CONFIG_FILE`);
 - semantic conventions generated with Weaver;
 - ready-made instrumentation for tower/axum and MCP (rmcp).

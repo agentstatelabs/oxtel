@@ -1,6 +1,6 @@
 [package]
 name = "oxtel"
-description = "OpenTelemetry-compatible telemetry for Rust, native to `tracing` and `metrics` (under development)"
+description = "OpenTelemetry-compatible telemetry for Rust, native to `tracing` and `metrics`: one call sets up traces, metrics and logs from the standard OTEL_* configuration"
 readme = "../../README.md"
 keywords = ["opentelemetry", "tracing", "metrics", "otlp", "prometheus"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
@@ -11,6 +11,26 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
+
+[features]
+default = ["otlp", "log"]
+# OTLP over HTTP: an HTTP client with rustls, and gzip.
+otlp = ["dep:oxtel-otlp"]
+# Forward records from the `log` crate into `tracing`, and so into oxtel.
+log = ["dep:tracing-log"]
+
+[dependencies]
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1" }
+oxtel-otlp = { path = "../oxtel-otlp", version = "0.0.1", optional = true }
+oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.0.1" }
+metrics = "0.24"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
+tracing-log = { version = "0.2", default-features = false, features = ["log-tracer", "std"], optional = true }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[dev-dependencies]
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
 
 [lints]
 workspace = true

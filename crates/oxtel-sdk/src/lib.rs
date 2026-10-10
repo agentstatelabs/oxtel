@@ -7,6 +7,7 @@
 //! standard `OTEL_*` configuration. Use this crate directly to assemble a
 //! pipeline yourself or to write an exporter.
 
+pub mod console;
 pub mod context;
 pub mod export;
 pub mod id;
