@@ -53,10 +53,10 @@ impl SimpleLogProcessor {
     /// A processor exporting through `exporter`.
     pub fn new(exporter: impl LogExporter, resource: Resource) -> Self {
         SimpleLogProcessor {
+            counters: Counters::new(("log record", "log records"), exporter.destination()),
             exporter: Box::new(exporter),
             resource,
             shut_down: AtomicBool::new(false),
-            counters: Counters::default(),
         }
     }
 }
@@ -102,6 +102,10 @@ impl<E: LogExporter> BatchSink<LogRecord> for Sink<E> {
     fn shutdown(&self) {
         let _ = self.exporter.shutdown();
     }
+
+    fn destination(&self) -> String {
+        self.exporter.destination()
+    }
 }
 
 /// Queues records and exports them in batches from its own thread. A full
@@ -117,6 +121,7 @@ impl BatchLogProcessor {
         BatchLogProcessor {
             batcher: Batcher::new(
                 "oxtel-log-export",
+                ("log record", "log records"),
                 ProcessorMetrics::new("batching_log_processor", "otel.sdk.processor.log.processed"),
                 config,
                 Sink { exporter, resource },

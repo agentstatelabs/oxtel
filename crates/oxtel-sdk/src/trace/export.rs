@@ -12,6 +12,13 @@ pub trait SpanExporter: Send + Sync + 'static {
     /// Export one batch.
     fn export(&self, batch: &[SpanData], resource: &Resource) -> Result<(), ExportError>;
 
+    /// Where this exporter sends data, in a few words for people, such as
+    /// `http://collector:4318/v1/traces (OTLP)`. oxtel's warnings about
+    /// failed exports name it. Never include credentials.
+    fn destination(&self) -> String {
+        "a custom exporter".into()
+    }
+
     /// Release resources. No exports follow.
     fn shutdown(&self) -> Result<(), ExportError> {
         Ok(())
@@ -46,6 +53,10 @@ impl InMemorySpanExporter {
 }
 
 impl SpanExporter for InMemorySpanExporter {
+    fn destination(&self) -> String {
+        "memory".into()
+    }
+
     fn export(&self, batch: &[SpanData], resource: &Resource) -> Result<(), ExportError> {
         self.spans
             .lock()

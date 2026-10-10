@@ -1,23 +1,30 @@
 //! OpenTelemetry-compatible telemetry for Rust, native to [`tracing`] and
-//! [`metrics`].
-//!
-//! One call sets everything up from the standard `OTEL_*` configuration:
+//! [`metrics`]: structured logs with one line of setup, and traces, metrics
+//! and logs sent to a collector when you want them, with no code changes.
 //!
 //! ```no_run
-//! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     let _telemetry = oxtel::builder()
-//!         .with_default_service_name("checkout")
-//!         .install()?;
+//! fn main() -> Result<(), oxtel::Error> {
+//!     // Keep the guard alive for as long as the program runs.
+//!     let _telemetry = oxtel::init()?;
 //!
-//!     // Instrument as usual: spans and events with `tracing`,
-//!     // metrics with `metrics`.
-//!     let span = tracing::info_span!("request", otel.kind = "server");
+//!     // Instrument as usual: events and spans with `tracing`, metrics
+//!     // with `metrics`.
+//!     tracing::info!(user.id = 42, "signed in");
+//!     let span = tracing::info_span!("request", order.id = 7);
 //!     let _entered = span.enter();
-//!     tracing::info!(items = 3, "listed");
-//!     metrics::counter!("requests.handled").increment(1);
+//!     tracing::warn!(attempt = 2, "payment provider slow; retrying");
+//!     metrics::counter!("orders.placed").increment(1);
 //!     Ok(())
-//! } // Dropping the guard exports what's pending.
+//! }
 //! ```
+//!
+//! With nothing configured, that writes log lines to standard error, as
+//! text on a terminal and one JSON object per line anywhere else, and sends
+//! nothing anywhere. Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example
+//! `http://localhost:4318`) and traces, metrics and logs go there over OTLP.
+//! On startup, oxtel logs one line saying what it set up. The
+//! [guide](https://github.com/agentstatelabs/oxtel/blob/main/docs/guide.md)
+//! covers the rest in plain words.
 //!
 //! What gets set up:
 //!

@@ -2,57 +2,114 @@
 
 OpenTelemetry-compatible telemetry for Rust, native to [`tracing`](https://docs.rs/tracing) and [`metrics`](https://docs.rs/metrics).
 
-Rust code already records spans, logs and metrics with `tracing` and `metrics`. oxtel turns that into standard OpenTelemetry output: OTLP for collectors and backends, and Prometheus/OpenMetrics for scrapes. You don't add a second instrumentation API, and there's no bridge between two.
+Structured logs with one line of setup, and OpenTelemetry traces, metrics and logs when you want them, without changing your code. Rust code already records spans, logs and metrics with `tracing` and `metrics`; oxtel turns that into JSON or text log lines, OTLP for collectors and backends, and Prometheus/OpenMetrics for scrapes. You don't add a second instrumentation API, and there's no bridge between two.
 
 > **Status: 0.1, early.** Traces, logs and metrics work end to end, and are tested against a real OpenTelemetry Collector. The API will change before 1.0; see [What works today](#what-works-today) and the [roadmap](DESIGN.md#6-plan).
 
-## Quick start
+## Get started
+
+You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the rest when you want it.
+
+### 1. Logs
 
 ```toml
 [dependencies]
-oxtel = "0.1"
+oxtel = "0.2"
+tracing = "0.1"
 ```
 
-The quick start is [`examples/quickstart.rs`](examples/quickstart.rs), which CI compiles:
-
 ```rust
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Traces, metrics and logs, configured by the standard OTEL_* variables.
-    // Keep the guard alive: dropping it exports what's pending.
-    let _telemetry = oxtel::builder()
-        .with_default_service_name("checkout")
-        .install()?;
+fn main() -> Result<(), oxtel::Error> {
+    // Keep this alive for as long as the program runs.
+    let _telemetry = oxtel::init()?;
 
-    // Your code, instrumented as usual.
-    let span = tracing::info_span!("request", otel.kind = "server", http.route = "/items");
-    let _entered = span.enter();
-    tracing::info!(items = 3, "listed");
-    metrics::histogram!("http.server.request.duration", "http.route" => "/items").record(0.042);
+    tracing::info!(user.id = 42, plan = "team", "signed in");
     Ok(())
 }
 ```
 
-Nothing leaves the process until you say where. Set `OTEL_EXPORTER_OTLP_ENDPOINT`, for example to `http://localhost:4318`, and traces, metrics and logs go there over OTLP/HTTP. This is the one place oxtel departs from the specification, whose default sends to `localhost:4318` even when nothing is set; naming the exporter, as in `OTEL_TRACES_EXPORTER=otlp`, still does that. The environment chooses the rest:
+On a terminal you get text. Anywhere else, such as a container whose output goes to a log shipper, you get one JSON object per line, with each field as a key of its own:
 
-| Variable | Choices |
+```text
+2026-10-10T22:53:13.416077Z  INFO app: signed in user.id=42 plan=team
+```
+
+```json
+{"timestamp":"2026-10-10T22:52:59.743752Z","level":"INFO","target":"app","message":"signed in","user.id":42,"plan":"team"}
+```
+
+`RUST_LOG` chooses how much is logged (`info` by default). If logs are all you want, `default-features = false` leaves out oxtel's export code and every HTTP and TLS crate with it. [`examples/logs.rs`](examples/logs.rs) is this step, runnable.
+
+### 2. Requests
+
+Wrap work in a span, and every line inside it carries the span's fields and a trace id, so you can find everything one request did:
+
+```rust
+let request = tracing::info_span!("request", order.id = 7);
+let _entered = request.enter();
+tracing::warn!(attempt = 2, "payment provider slow; retrying");
+// {..., "message":"payment provider slow; retrying","trace_id":"a98f5438…","span_id":"86faebde…","order.id":7,"attempt":2}
+```
+
+For a web service, one line on an axum router does this for every request, and records request durations as metrics too (`oxtel-tower` with its `axum` feature):
+
+```rust
+let app = Router::new()
+    .route("/orders/{id}", get(order))
+    .layer(oxtel_tower::HttpServerLayer::new());
+```
+
+For an MCP server, wrap it: `oxtel_rmcp::Instrumented::new(server)`. Logs stay on standard error, out of the protocol's way.
+
+### 3. Send it somewhere
+
+Point oxtel at an OpenTelemetry Collector, or at any backend that accepts OTLP, and traces, metrics and logs go there. No code changes:
+
+```bash
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=shop cargo run
+```
+
+To see traces on your own machine, run Jaeger and open http://localhost:16686:
+
+```bash
+docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
+```
+
+Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs one line saying what it set up, and if sending fails, it says so and what to check, so there's no guessing:
+
+```text
+INFO oxtel: log lines: standard error, as text; traces: http://localhost:4318/v1/traces (OTLP); metrics: http://localhost:4318/v1/metrics (OTLP); logs: http://localhost:4318/v1/logs (OTLP)
+```
+
+The [guide](docs/guide.md) has the few terms worth knowing, recipes (Prometheus, Elastic, hosted backends, MCP servers) and what to do when nothing shows up.
+
+## Settings
+
+Everything is set from the environment, using the standard OpenTelemetry variables, so operators can change it without a rebuild. The ones you're most likely to need:
+
+| Variable | What it does |
+|---|---|
+| `RUST_LOG` | how much is recorded: `info` (the default), `debug`, `warn`, or per module, such as `info,hyper=warn` |
+| `OTEL_SERVICE_NAME` | your service's name, as backends will show it |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | where to send traces, metrics and logs, such as `http://localhost:4318`; nothing is sent until it's set |
+| `OTEL_EXPORTER_OTLP_HEADERS` | headers to send, such as `Authorization=Bearer <token>` for a hosted backend |
+| `OXTEL_LOG_FORMAT` | how local log lines look: `auto` (the default: text on a terminal, JSON otherwise), `text`, `json` (flat, OpenTelemetry field names), `ecs` (Elastic Common Schema) or `none` |
+| `OXTEL_LOG_OUTPUT` | where local log lines go: `stderr` (the default) or `stdout` |
+
+And the rest:
+
+| Variable | What it does |
 |---|---|
 | `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (the default once an endpoint is set), `console`, `none` |
 | `OTEL_METRICS_EXPORTER` | `otlp` (the default once an endpoint is set), `prometheus` (serves `/metrics` on port 9464), `console`, `none` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `_HEADERS`, `_PROTOCOL`, `_COMPRESSION`, `_TIMEOUT` | where and how OTLP is sent (`http/protobuf` or `http/json`), for all signals or each one |
-| `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | the resource |
-| `OTEL_CONFIG_FILE` | a declarative configuration file (schema 1.x) to use instead of the variables below; see [`examples/otel-config.yaml`](examples/otel-config.yaml) |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`, `_COMPRESSION`, `_TIMEOUT` | how OTLP is sent (`http/protobuf` or `http/json`), for all signals or each one (`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and so on) |
+| `OTEL_RESOURCE_ATTRIBUTES` | more about the service, such as `deployment.environment.name=prod` |
+| `OTEL_CONFIG_FILE` | a declarative configuration file (schema 1.x) to use instead of the variables; see [`examples/otel-config.yaml`](examples/otel-config.yaml) |
 | `OTEL_SDK_DISABLED` | `true` turns it all off, except local logs |
-| `OXTEL_LOG_FORMAT` | how local log lines look: `auto` (the default: text on a terminal, JSON otherwise), `text`, `json` (flat, OpenTelemetry field names), `ecs` (Elastic Common Schema) or `none`; overrides the program's choice |
-| `OXTEL_LOG_OUTPUT` | where local log lines go: `stderr` (the default) or `stdout`; overrides the program's choice |
-| `RUST_LOG` | which spans and events are recorded (`info` by default) |
 
-When it starts, oxtel logs one line saying what it set up, so there's no guessing:
+oxtel follows the OpenTelemetry specification's variables and defaults with one deliberate exception: the specification sends to `localhost:4318` even when nothing is set, and oxtel sends nothing until an endpoint is set. Naming the exporter, as in `OTEL_TRACES_EXPORTER=otlp`, still gets the specification's default.
 
-```text
-INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
-```
-
-Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=console OTEL_METRICS_EXPORTER=console cargo run -p oxtel-examples --example quickstart`. To assemble the pipelines yourself, as a distribution might, see [`examples/manual.rs`](examples/manual.rs).
+A program can also make these choices in code, with `oxtel::builder()`; its documentation says which ones the environment overrides. [`examples/quickstart.rs`](examples/quickstart.rs) uses the builder, and [`examples/manual.rs`](examples/manual.rs) assembles the pipelines by hand, as a distribution might.
 
 ## What works today
 
@@ -76,9 +133,7 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 | **Configuration** | The standard `OTEL_*` variables: `OTEL_SDK_DISABLED`, each signal's exporter, the resource, sampler, propagators, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, the metric export interval and timeout, the Prometheus endpoint, and each signal's OTLP endpoint, headers, compression and timeout. |
 | **Self-observability** | When turned on, oxtel's own pipelines report what they did as `otel.sdk.*` metrics, named by the semantic conventions: items processed, dropped (and why), exported and rejected, and how long exports and collections take. |
 
-**Next:** the 0.1 release, and adoption in AgentStateGraph.
-
-After that: OpAMP, gRPC, more instrumentation. See the [design](DESIGN.md).
+**Next:** adoption in AgentStateGraph, then OpAMP, gRPC and more instrumentation. See the [design](DESIGN.md).
 
 ## How it compares
 

@@ -29,6 +29,22 @@ jobs:
       - run: cargo clippy -p oxtel-rmcp --all-targets --features client
       - run: cargo test -p oxtel-rmcp --features client
       - run: cargo clippy -p oxtel-semconv --all-targets --features experimental
+      # oxtel without its default features: local logs only.
+      - run: cargo clippy -p oxtel --no-default-features --all-targets
+      - run: cargo test -p oxtel --no-default-features
+      - name: A logs-only build pulls in no HTTP or TLS crates
+        shell: bash
+        run: |
+          tree=$(cargo tree -p oxtel --no-default-features -e normal --prefix none)
+          # A tree that failed to print would pass the check below.
+          grep -q '^tracing-subscriber v' <<<"$tree"
+          if grep -E '^(ureq|rustls|hyper|reqwest|h2|tokio|native-tls|openssl|ring|aws-lc-rs|webpki|webpki-roots|flate2) v' <<<"$tree"; then
+            echo "a logs-only build must not depend on these" >&2
+            exit 1
+          fi
+      - name: With nothing configured, the logs example writes JSON lines
+        shell: bash
+        run: cargo run -q -p oxtel-examples --example logs 2>&1 >/dev/null | grep -F '"message":"signed in","user.id":42'
       - run: cargo doc --workspace --no-deps
 
   msrv:

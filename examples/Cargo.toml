@@ -22,3 +22,7 @@ path = "quickstart.rs"
 [[example]]
 name = "manual"
 path = "manual.rs"
+
+[[example]]
+name = "logs"
+path = "logs.rs"
