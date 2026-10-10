@@ -23,6 +23,9 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets
       - run: cargo test --workspace
+      # Features the workspace build leaves off.
+      - run: cargo clippy -p oxtel-tower --all-targets --features axum
+      - run: cargo test -p oxtel-tower --features axum
       - run: cargo doc --workspace --no-deps
 
   msrv:

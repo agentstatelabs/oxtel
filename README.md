@@ -48,6 +48,7 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 | **Setup** | `oxtel::init()` builds every pipeline from the standard environment and installs it. A builder adds resource attributes, filters, layers of your own, and hooks into each pipeline for extra exporters. Settings oxtel can't honour are logged as warnings rather than failing. Shutdown flushes every pipeline at once, within a deadline. |
 | **Traces** | A `tracing` layer: span fields become attributes; `otel.name`, `otel.kind` and `otel.status_*` set the name, kind and status; events become span events. Sampling is decided when a span starts, and unsampled spans keep their ids. Batch export never blocks the program: when it's overloaded, it drops spans and counts them. |
 | **Logs** | A `tracing` layer: each event becomes a log record. The level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. Inside a span, the record carries the span's trace and span ids, sampled or not. Events from the `log` crate, forwarded by `tracing-log`, keep their target. |
+| **HTTP** | `oxtel-tower`: layers for tower, axum and hyper servers and clients, following the HTTP conventions. Server spans named by route, continuing the caller's W3C trace, with `http.server.request.duration` and `http.server.active_requests`. Client spans that carry the trace onward, with `http.client.request.duration`. Query strings and URL credentials are never recorded. Also a `/metrics` service for an axum router or hyper server. |
 | **Local logs** | Each event as a line on standard error, beside or instead of export: text for people, flat JSON with fields under their OpenTelemetry names, or ECS JSON for Elastic. Lines carry their span's trace and span ids. |
 | **Metrics** | A `metrics` recorder: counters, gauges, histograms, pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` or scraped by Prometheus, or both. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
@@ -61,7 +62,7 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 **Coming next (Phase 1):**
 - declarative configuration (`OTEL_CONFIG_FILE`);
 - semantic conventions generated with Weaver;
-- ready-made instrumentation for tower/axum and MCP (rmcp).
+- ready-made instrumentation for MCP (rmcp).
 
 After that: OpAMP, gRPC, more instrumentation. See the [design](DESIGN.md).
 
