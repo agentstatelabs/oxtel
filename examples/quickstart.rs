@@ -1,15 +1,16 @@
-//! oxtel in one program: traces to an OTLP collector, metrics for a
-//! Prometheus scrape, exemplars linking the two.
+//! oxtel in one program: traces and logs to an OTLP collector, metrics for
+//! a Prometheus scrape, exemplars linking metrics to traces.
 //!
 //! `cargo run -p oxtel-examples --example quickstart`
 //!
 //! With a collector listening on localhost:4318 (or wherever
-//! `OTEL_EXPORTER_OTLP_ENDPOINT` points), the spans arrive there. The
-//! Prometheus exposition is printed at the end.
+//! `OTEL_EXPORTER_OTLP_ENDPOINT` points), the spans and log records arrive
+//! there. The Prometheus exposition is printed at the end.
 
 use oxtel_otlp::OtlpHttpExporter;
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::Resource;
+use oxtel_sdk::logs::LoggerProvider;
 use oxtel_sdk::metrics::MeterProvider;
 use oxtel_sdk::trace::TracerProvider;
 use tracing_subscriber::layer::SubscriberExt;
@@ -21,14 +22,28 @@ fn main() {
         .with_default_service_name("quickstart")
         .build();
 
-    // Traces: tracing spans, batched and exported over OTLP/HTTP.
+    // One OTLP exporter serves every signal. Endpoint, headers, compression
+    // and timeout come from the OTEL_EXPORTER_OTLP_* variables.
+    let otlp = OtlpHttpExporter::builder().build();
+
+    // Traces: tracing spans, batched and exported over OTLP/HTTP. Events
+    // go out as log records rather than span events.
     let traces = TracerProvider::builder()
         .with_resource(resource.clone())
-        .with_batch_exporter(OtlpHttpExporter::builder().build())
+        .with_span_events(false)
+        .with_batch_exporter(otlp.clone())
         .build();
+
+    // Logs: tracing events, carrying the ids of the span they happen in.
+    let logs = LoggerProvider::builder()
+        .with_resource(resource.clone())
+        .with_batch_exporter(otlp)
+        .build();
+
     tracing::subscriber::set_global_default(
         tracing_subscriber::registry()
             .with(traces.layer())
+            .with(logs.layer())
             .with(tracing_subscriber::fmt::layer()),
     )
     .expect("set the subscriber");
@@ -56,6 +71,7 @@ fn main() {
     let (_content_type, body) = prometheus.render(Some("application/openmetrics-text"));
     println!("{body}");
 
-    // Flush the spans before exiting.
+    // Flush the spans and log records before exiting.
+    let _ = logs.shutdown();
     let _ = traces.shutdown();
 }

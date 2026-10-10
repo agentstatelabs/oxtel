@@ -9,6 +9,7 @@ use std::time::{Duration, Instant};
 use oxtel_otlp::OtlpHttpExporter;
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::context::TraceFlags;
+use oxtel_sdk::logs::LoggerProvider;
 use oxtel_sdk::metrics::{ExemplarFilter, MeterProvider};
 use oxtel_sdk::trace::{Sampler, TracerProvider, attach_remote_parent, span_context};
 use oxtel_sdk::{KeyValue, Resource, SpanContext, SpanId, TraceId};
@@ -90,7 +91,7 @@ fn traces_reach_the_collector_intact() {
             .with_sampler(Sampler::AlwaysOn)
             .with_batch_exporter(
                 OtlpHttpExporter::builder()
-                    .with_url(format!("{}/v1/traces", otlp_base()))
+                    .with_endpoint(&otlp_base())
                     .with_gzip(gzip)
                     .build(),
             )
@@ -177,6 +178,108 @@ fn traces_reach_the_collector_intact() {
         let end: u64 = load["endTimeUnixNano"].as_str().unwrap().parse().unwrap();
         assert!(end >= start && start > 0);
     }
+}
+
+/// Each log record in the requests, with its scope's name.
+fn log_records(requests: &[Value]) -> Vec<(&str, &Value)> {
+    requests
+        .iter()
+        .flat_map(|r| r["resourceLogs"].as_array().into_iter().flatten())
+        .flat_map(|rl| rl["scopeLogs"].as_array().into_iter().flatten())
+        .flat_map(|sl| {
+            let scope = sl["scope"]["name"].as_str().unwrap_or_default();
+            sl["logRecords"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .map(move |r| (scope, r))
+        })
+        .collect()
+}
+
+#[test]
+#[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
+fn logs_reach_the_collector_intact() {
+    let run = run_id();
+    let resource = Resource::builder()
+        .without_env()
+        .with_service_name("oxtel-conformance")
+        .with_attribute(KeyValue::new("test.run", run.clone()))
+        .build();
+    // Traces only lend their ids here; the events go out as log records.
+    let traces = TracerProvider::builder()
+        .with_resource(resource.clone())
+        .with_sampler(Sampler::AlwaysOn)
+        .with_span_events(false)
+        .build();
+    let logs = LoggerProvider::builder()
+        .with_resource(resource)
+        .with_batch_exporter(
+            OtlpHttpExporter::builder()
+                .with_endpoint(&otlp_base())
+                .build(),
+        )
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(traces.layer())
+        .with(logs.layer());
+    let cx = tracing::subscriber::with_default(subscriber, || {
+        let span = tracing::info_span!("request");
+        span.in_scope(|| {
+            tracing::warn!(
+                name: "cache.miss",
+                target: "shop::cache",
+                key = "items",
+                hits = 0,
+                ratio = 0.25,
+                stale = true,
+                "slow lookup for {}",
+                "items"
+            );
+        });
+        tracing::error!(target: "shop::db", "connection lost");
+        span_context(&span).unwrap()
+    });
+    logs.force_flush().expect("flush");
+    assert_eq!(
+        logs.stats().export_failed,
+        0,
+        "the Collector refused the export"
+    );
+
+    let requests = lines_with("logs.json", &run, 1, Duration::from_secs(20));
+    let records = log_records(&requests);
+    let find = |scope: &str| {
+        records
+            .iter()
+            .find(|(s, _)| *s == scope)
+            .map(|(_, r)| *r)
+            .unwrap_or_else(|| panic!("no record from {scope} in {records:?}"))
+    };
+    let warn = find("shop::cache");
+    assert_eq!(warn["severityNumber"], 13, "SEVERITY_NUMBER_WARN");
+    assert_eq!(warn["severityText"], "WARN");
+    assert_eq!(warn["body"]["stringValue"], "slow lookup for items");
+    assert_eq!(warn["eventName"], "cache.miss");
+    assert_eq!(warn["traceId"], cx.trace_id.to_string());
+    assert_eq!(warn["spanId"], cx.span_id.to_string());
+    assert_eq!(warn["flags"], 3, "sampled and random");
+    let a = &warn["attributes"];
+    assert_eq!(attr(a, "key")["stringValue"], "items");
+    assert_eq!(attr(a, "hits")["intValue"], "0");
+    assert_eq!(attr(a, "ratio")["doubleValue"], 0.25);
+    assert_eq!(attr(a, "stale")["boolValue"], true);
+    let time: u64 = warn["timeUnixNano"].as_str().unwrap().parse().unwrap();
+    assert!(time > 0);
+
+    let error = find("shop::db");
+    assert_eq!(error["severityNumber"], 17, "SEVERITY_NUMBER_ERROR");
+    assert_eq!(error["body"]["stringValue"], "connection lost");
+    assert_eq!(
+        error["traceId"].as_str().unwrap_or_default(),
+        "",
+        "outside any span"
+    );
 }
 
 /// Serve `/metrics` on localhost:9464 for the Collector's Prometheus

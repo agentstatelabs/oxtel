@@ -18,7 +18,7 @@ use crate::id::{SpanId, TraceId};
 use crate::trace::data::{Event, Link, Scope, SpanData, SpanKind, Status};
 use crate::trace::processor::SpanProcessor;
 use crate::trace::sampler::Sampler;
-use crate::value::{KeyValue, Value, upsert};
+use crate::value::{KeyValue, Value, int_value, upsert};
 
 /// How many attributes, events and links a span keeps. More are dropped and
 /// counted.
@@ -252,14 +252,6 @@ impl Visit for SpanFields<'_> {
         if !self.special(field, &text) {
             self.attribute(field, Value::String(text));
         }
-    }
-}
-
-/// An integer that doesn't fit OpenTelemetry's i64 becomes a string.
-fn int_value(fits: Option<i64>, value: impl ToString) -> Value {
-    match fits {
-        Some(v) => Value::I64(v),
-        None => Value::String(value.to_string()),
     }
 }
 

@@ -4,7 +4,7 @@ OpenTelemetry-compatible telemetry for Rust, native to [`tracing`](https://docs.
 
 Rust code already records spans, logs and metrics with `tracing` and `metrics`. oxtel turns that into standard OpenTelemetry output: OTLP for collectors and backends, and Prometheus/OpenMetrics for scrapes. You don't add a second instrumentation API, and there's no bridge between two.
 
-> **Status: early development (Phase 0 of the [design](DESIGN.md) is done).** Traces and metrics work end to end and are tested against a real OpenTelemetry Collector. The APIs will change before 0.1; see [What works today](#what-works-today) and the [roadmap](DESIGN.md#6-plan).
+> **Status: early development (Phase 1 of the [design](DESIGN.md) is under way).** Traces, logs and metrics work end to end and are tested against a real OpenTelemetry Collector. The APIs will change before 0.1; see [What works today](#what-works-today) and the [roadmap](DESIGN.md#6-plan).
 
 ## Quick start
 
@@ -14,6 +14,7 @@ Abridged from [`examples/quickstart.rs`](examples/quickstart.rs), which CI compi
 use oxtel_otlp::OtlpHttpExporter;
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::Resource;
+use oxtel_sdk::logs::LoggerProvider;
 use oxtel_sdk::metrics::MeterProvider;
 use oxtel_sdk::trace::TracerProvider;
 use tracing_subscriber::layer::SubscriberExt;
@@ -22,12 +23,21 @@ use tracing_subscriber::layer::SubscriberExt;
 // OTEL_* variables; this name applies unless OTEL_SERVICE_NAME is set.
 let resource = Resource::builder().with_default_service_name("quickstart").build();
 
-// Traces: tracing spans, batched and exported over OTLP/HTTP.
+// One OTLP/HTTP exporter, configured by OTEL_EXPORTER_OTLP_*, serves
+// traces and logs. Events go out as log records carrying their span's ids.
+let otlp = OtlpHttpExporter::builder().build();
 let traces = TracerProvider::builder()
     .with_resource(resource.clone())
-    .with_batch_exporter(OtlpHttpExporter::builder().build())
+    .with_span_events(false)
+    .with_batch_exporter(otlp.clone())
     .build();
-tracing::subscriber::set_global_default(tracing_subscriber::registry().with(traces.layer()))?;
+let logs = LoggerProvider::builder()
+    .with_resource(resource.clone())
+    .with_batch_exporter(otlp)
+    .build();
+tracing::subscriber::set_global_default(
+    tracing_subscriber::registry().with(traces.layer()).with(logs.layer()),
+)?;
 
 // Metrics: the `metrics` macros, recorded by oxtel.
 let meters = MeterProvider::builder().build();
@@ -36,6 +46,7 @@ metrics::set_global_recorder(meters.recorder())?;
 // Your code, instrumented as usual.
 let span = tracing::info_span!("request", otel.kind = "server", http.route = "/items");
 let _entered = span.enter();
+tracing::info!(items = 3, "listed");
 metrics::histogram!("http.server.request.duration", "http.route" => "/items").record(0.042);
 
 // What a Prometheus scrape gets: OpenMetrics, with exemplars linking each
@@ -49,16 +60,17 @@ let (content_type, body) = PrometheusExporter::new(meters, resource)
 | | |
 |---|---|
 | **Traces** | A `tracing` layer: span fields become attributes; `otel.name`, `otel.kind` and `otel.status_*` set the name, kind and status; events become span events. Sampling is decided when a span starts, and unsampled spans keep their ids. Batch export never blocks the program: when it's overloaded, it drops spans and counts them. |
+| **Logs** | A `tracing` layer: each event becomes a log record. The level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. Inside a span, the record carries the span's trace and span ids, sampled or not. Events from the `log` crate, forwarded by `tracing-log`, keep their target. |
 | **Metrics** | A `metrics` recorder: counters, gauges, histograms. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
-| **OTLP** | Traces over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. The types are generated from the official protocol definitions. |
+| **OTLP** | Traces and logs over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
 | **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. |
 | **Propagation** | W3C Trace Context and Baggage, parsed strictly. |
-| **Configuration** | The standard `OTEL_*` variables for the resource, sampler, batching, span limits and OTLP endpoint, headers, compression and timeout. |
+| **Configuration** | The standard `OTEL_*` variables for the resource, sampler, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, and each signal's OTLP endpoint, headers, compression and timeout. |
 
 **Coming next (Phase 1):**
 - one-call setup;
-- OTLP logs and metrics;
+- OTLP metrics;
 - declarative configuration (`OTEL_CONFIG_FILE`);
 - semantic conventions generated with Weaver;
 - ready-made instrumentation for tower/axum and MCP (rmcp).
@@ -79,7 +91,7 @@ Against `tracing-opentelemetry` with the official `opentelemetry_sdk` 0.33, and 
 
 ## How it's checked
 
-- **Against a real OpenTelemetry Collector** in CI ([`conformance/`](conformance/)). Traces sent over OTLP, and metrics scraped by its Prometheus receiver, must arrive intact, exemplars included.
+- **Against a real OpenTelemetry Collector** in CI ([`conformance/`](conformance/)). Traces and logs sent over OTLP, and metrics scraped by its Prometheus receiver, must arrive intact, exemplars included.
 - **Against Prometheus's own tools.** `promtool` checks the text format, and a strict OpenMetrics parser checks OpenMetrics.
 - **Fuzzing and property tests** cover every parser of outside input ([`fuzz/`](fuzz/)).
 

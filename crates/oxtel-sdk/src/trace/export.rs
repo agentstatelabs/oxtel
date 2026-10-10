@@ -1,43 +1,10 @@
 //! Exporters: where finished spans go.
 
-use std::fmt;
 use std::sync::{Arc, Mutex};
 
+use crate::export::ExportError;
 use crate::resource::Resource;
 use crate::trace::data::SpanData;
-
-/// Why an export failed.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExportError {
-    /// The export didn't finish within its timeout.
-    Timeout,
-    /// The data couldn't be delivered: connection, TLS or I/O failure.
-    Transport(String),
-    /// The receiver refused the data.
-    Rejected {
-        /// The response status, such as an HTTP status code.
-        status: u16,
-        /// The receiver's explanation, if any.
-        message: String,
-    },
-    /// The exporter or processor has been shut down.
-    Shutdown,
-}
-
-impl fmt::Display for ExportError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ExportError::Timeout => write!(f, "export timed out"),
-            ExportError::Transport(e) => write!(f, "export failed: {e}"),
-            ExportError::Rejected { status, message } => {
-                write!(f, "export rejected ({status}): {message}")
-            }
-            ExportError::Shutdown => write!(f, "exporter is shut down"),
-        }
-    }
-}
-
-impl std::error::Error for ExportError {}
 
 /// Sends finished spans somewhere. Called from a processor's thread, never
 /// from the instrumented code's.

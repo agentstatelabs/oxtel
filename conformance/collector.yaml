@@ -27,6 +27,9 @@ exporters:
   file/metrics:
     path: /out/metrics.json
     flush_interval: 100ms
+  file/logs:
+    path: /out/logs.json
+    flush_interval: 100ms
 
 service:
   extensions: [health_check]
@@ -37,3 +40,6 @@ service:
     metrics:
       receivers: [prometheus]
       exporters: [file/metrics]
+    logs:
+      receivers: [otlp]
+      exporters: [file/logs]
