@@ -17,6 +17,15 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **`oxtel-tower`: HTTP instrumentation** for tower services, and so axum and hyper, following the semantic conventions.
+  - `HttpServerLayer`:
+    - a span per request named `{method} {route}`, continuing the caller's W3C trace (switchable off at trust boundaries);
+    - `http.request.method` (`_OTHER` for unknown methods, with the original), `url.path`, `url.scheme`, `http.route`, `server.address`/`port`, `network.protocol.version`, `user_agent.original` and `http.response.status_code`;
+    - `error.type` and status Error for 5xx;
+    - `http.server.request.duration` and `http.server.active_requests`, labelled by route rather than path so series stay bounded. Cancelled requests are uncounted too.
+    - With the `axum` feature, the route comes from `MatchedPath`. `with_route` serves other routers. `with_access_log` adds an event per request, at `error` for 5xx. `with_span` with `server_span!` lets a program declare fields of its own for later middleware to record.
+  - `HttpClientLayer`: client spans, `traceparent` sent with each request, `error.type` for 4xx, 5xx and failures, and `http.client.request.duration`. `url.full` leaves out credentials and the query.
+  - `MetricsService`: Prometheus `/metrics` as a tower service, with per-scrape format negotiation.
 - **Local log output** (`oxtel_sdk::logs::LocalLayer`): each event as a line, on standard error or a writer of your choice, carrying its span's trace and span ids.
   - `text`: like `tracing`'s own output: time, level, the span chain with its fields, target, message and fields.
   - `json`: one flat object per line: `timestamp`, `level`, `target`, `message`, `trace_id`, `span_id`, then every enclosing span's fields (inner wins) and the event's, under their names as written. A field named like a fixed key is written as `fields.<name>`, so lines never repeat a key.
