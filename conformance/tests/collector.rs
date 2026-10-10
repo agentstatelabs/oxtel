@@ -10,7 +10,7 @@ use oxtel_otlp::OtlpHttpExporter;
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::context::TraceFlags;
 use oxtel_sdk::logs::LoggerProvider;
-use oxtel_sdk::metrics::{ExemplarFilter, MeterProvider};
+use oxtel_sdk::metrics::{ExemplarFilter, MeterProvider, PeriodicReaderConfig};
 use oxtel_sdk::trace::{Sampler, TracerProvider, attach_remote_parent, span_context};
 use oxtel_sdk::{KeyValue, Resource, SpanContext, SpanId, TraceId};
 use serde_json::Value;
@@ -401,4 +401,104 @@ fn the_collector_scrapes_openmetrics_with_exemplars() {
         .as_f64()
         .or_else(|| point["asInt"].as_str().and_then(|v| v.parse::<f64>().ok()));
     assert_eq!(value, Some(5.0));
+}
+
+#[test]
+#[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
+fn metrics_reach_the_collector_over_otlp() {
+    let run = run_id();
+    let tracer = TracerProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_sampler(Sampler::AlwaysOn)
+        .build();
+    let meters = MeterProvider::builder()
+        .with_resource(
+            Resource::builder()
+                .without_env()
+                .with_service_name("oxtel-conformance")
+                .build(),
+        )
+        .with_exemplar_filter(ExemplarFilter::TraceBased)
+        .with_periodic_exporter_config(
+            OtlpHttpExporter::builder()
+                .with_endpoint(&otlp_base())
+                .build(),
+            PeriodicReaderConfig {
+                interval: Duration::from_secs(3600),
+                timeout: Duration::from_secs(20),
+            },
+        )
+        .build();
+    let subscriber = tracing_subscriber::registry().with(tracer.layer());
+    let trace_id = tracing::subscriber::with_default(subscriber, || {
+        metrics::with_local_recorder(&meters.recorder(), || {
+            metrics::describe_histogram!(
+                "oxtel.conformance.duration",
+                metrics::Unit::Seconds,
+                "How long a conformance operation took."
+            );
+            let span = tracing::info_span!("operation");
+            let _entered = span.enter();
+            let h = metrics::histogram!("oxtel.conformance.duration", "run" => run.clone());
+            h.record(0.012);
+            h.record(0.2);
+            metrics::counter!("oxtel.conformance.operations", "run" => run.clone()).increment(5);
+            metrics::gauge!("oxtel.conformance.queue", "run" => run.clone()).set(7.5);
+            span_context(&span).unwrap().trace_id
+        })
+    });
+    meters
+        .force_flush()
+        .expect("the Collector refused the export");
+
+    let batches = lines_with("metrics.json", &run, 1, Duration::from_secs(20));
+    let ours = |name: &str| {
+        let metric = metrics_named(&batches, name)
+            .into_iter()
+            .find(|m| m["name"] == name)
+            .unwrap_or_else(|| panic!("no {name} in {batches:?}"));
+        metric.clone()
+    };
+    let series = |data: &Value| {
+        data["dataPoints"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| attr(&p["attributes"], "run")["stringValue"] == run.as_str())
+            .cloned()
+            .expect("our series")
+    };
+
+    let counter = ours("oxtel.conformance.operations");
+    assert_eq!(counter["sum"]["isMonotonic"], true);
+    assert_eq!(counter["sum"]["aggregationTemporality"], 2, "CUMULATIVE");
+    let point = series(&counter["sum"]);
+    assert_eq!(point["asInt"], "5");
+    assert_eq!(point["exemplars"][0]["traceId"], trace_id.to_string());
+
+    let gauge = ours("oxtel.conformance.queue");
+    assert_eq!(series(&gauge["gauge"])["asDouble"], 7.5);
+
+    let histogram = ours("oxtel.conformance.duration");
+    assert_eq!(histogram["unit"], "s");
+    assert_eq!(
+        histogram["description"],
+        "How long a conformance operation took."
+    );
+    assert_eq!(histogram["histogram"]["aggregationTemporality"], 2);
+    let point = series(&histogram["histogram"]);
+    assert_eq!(point["count"], "2");
+    assert!((point["sum"].as_f64().unwrap() - 0.212).abs() < 1e-9);
+    assert_eq!(
+        (point["min"].as_f64(), point["max"].as_f64()),
+        (Some(0.012), Some(0.2))
+    );
+    assert_eq!(point["explicitBounds"].as_array().unwrap().len(), 14);
+    let exemplars = point["exemplars"].as_array().expect("exemplars");
+    assert_eq!(exemplars.len(), 2);
+    assert!(
+        exemplars
+            .iter()
+            .all(|e| e["traceId"] == trace_id.to_string())
+    );
 }

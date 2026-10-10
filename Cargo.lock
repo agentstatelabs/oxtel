@@ -1119,6 +1119,7 @@ version = "0.0.1"
 dependencies = [
  "fastrand",
  "flate2",
+ "metrics",
  "oxtel-sdk",
  "prost",
  "tracing",

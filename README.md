@@ -61,16 +61,16 @@ let (content_type, body) = PrometheusExporter::new(meters, resource)
 |---|---|
 | **Traces** | A `tracing` layer: span fields become attributes; `otel.name`, `otel.kind` and `otel.status_*` set the name, kind and status; events become span events. Sampling is decided when a span starts, and unsampled spans keep their ids. Batch export never blocks the program: when it's overloaded, it drops spans and counts them. |
 | **Logs** | A `tracing` layer: each event becomes a log record. The level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. Inside a span, the record carries the span's trace and span ids, sampled or not. Events from the `log` crate, forwarded by `tracing-log`, keep their target. |
-| **Metrics** | A `metrics` recorder: counters, gauges, histograms. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
+| **Metrics** | A `metrics` recorder: counters, gauges, histograms, pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` or scraped by Prometheus, or both. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
-| **OTLP** | Traces and logs over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
+| **OTLP** | Traces, metrics and logs over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
 | **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. |
 | **Propagation** | W3C Trace Context and Baggage, parsed strictly. |
-| **Configuration** | The standard `OTEL_*` variables for the resource, sampler, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, and each signal's OTLP endpoint, headers, compression and timeout. |
+| **Configuration** | The standard `OTEL_*` variables for the resource, sampler, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, metric export interval and timeout, and each signal's OTLP endpoint, headers, compression and timeout. |
+| **Self-observability** | When turned on, oxtel's own pipelines report what they did as `otel.sdk.*` metrics, named by the semantic conventions: items processed, dropped (and why), exported and rejected, and how long exports and collections take. |
 
 **Coming next (Phase 1):**
 - one-call setup;
-- OTLP metrics;
 - declarative configuration (`OTEL_CONFIG_FILE`);
 - semantic conventions generated with Weaver;
 - ready-made instrumentation for tower/axum and MCP (rmcp).
@@ -91,7 +91,7 @@ Against `tracing-opentelemetry` with the official `opentelemetry_sdk` 0.33, and 
 
 ## How it's checked
 
-- **Against a real OpenTelemetry Collector** in CI ([`conformance/`](conformance/)). Traces and logs sent over OTLP, and metrics scraped by its Prometheus receiver, must arrive intact, exemplars included.
+- **Against a real OpenTelemetry Collector** in CI ([`conformance/`](conformance/)). Traces, metrics and logs sent over OTLP, and metrics scraped by its Prometheus receiver, must arrive intact, exemplars included.
 - **Against Prometheus's own tools.** `promtool` checks the text format, and a strict OpenMetrics parser checks OpenMetrics.
 - **Fuzzing and property tests** cover every parser of outside input ([`fuzz/`](fuzz/)).
 

@@ -3,13 +3,16 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxtel_sdk::logs::LogRecord;
+use oxtel_sdk::metrics::{Exemplar, MetricFamily, OVERFLOW_ATTRIBUTE, Point, PointValue};
 use oxtel_sdk::trace::{Link, Scope, SpanData, SpanKind, Status};
 use oxtel_sdk::{KeyValue, Resource, Value};
 
 use crate::proto::collector::logs::v1::ExportLogsServiceRequest;
+use crate::proto::collector::metrics::v1::ExportMetricsServiceRequest;
 use crate::proto::collector::trace::v1::ExportTraceServiceRequest;
 use crate::proto::common::v1 as common;
 use crate::proto::logs::v1 as logs;
+use crate::proto::metrics::v1 as metrics;
 use crate::proto::resource::v1 as resource;
 use crate::proto::trace::v1 as trace;
 
@@ -48,6 +51,137 @@ pub fn logs_request(batch: &[LogRecord], res: &Resource) -> ExportLogsServiceReq
                 .collect(),
             schema_url: res.schema_url().unwrap_or_default().to_string(),
         }],
+    }
+}
+
+/// The OTLP request for one collection of metrics: one resource, the
+/// metrics grouped by instrumentation scope. Values are cumulative since
+/// each family's start time. Families without series are left out.
+pub fn metrics_request(families: &[MetricFamily], res: &Resource) -> ExportMetricsServiceRequest {
+    let families: Vec<&MetricFamily> = families.iter().filter(|f| !f.points.is_empty()).collect();
+    ExportMetricsServiceRequest {
+        resource_metrics: vec![metrics::ResourceMetrics {
+            resource: Some(resource_to_proto(res)),
+            scope_metrics: by_scope(&families, |f| &f.scope, |f| metric_to_proto(f))
+                .into_iter()
+                .map(|(scope, metrics)| metrics::ScopeMetrics {
+                    scope: Some(scope_to_proto(scope)),
+                    metrics,
+                    schema_url: String::new(),
+                })
+                .collect(),
+            schema_url: res.schema_url().unwrap_or_default().to_string(),
+        }],
+    }
+}
+
+const CUMULATIVE: i32 = metrics::AggregationTemporality::Cumulative as i32;
+
+fn metric_to_proto(family: &MetricFamily) -> metrics::Metric {
+    use metrics::metric::Data;
+    use metrics::number_data_point::Value as Number;
+    let (start, time) = (unix_nanos(family.start_time), unix_nanos(family.time));
+    let number = |point: &Point, value: Number, start: u64| metrics::NumberDataPoint {
+        attributes: point_attributes(point),
+        start_time_unix_nano: start,
+        time_unix_nano: time,
+        exemplars: point.exemplar.iter().map(exemplar_to_proto).collect(),
+        flags: 0,
+        value: Some(value),
+    };
+    let data = match family.points.first().map(|p| &p.value) {
+        Some(PointValue::Counter(_)) => Data::Sum(metrics::Sum {
+            data_points: family
+                .points
+                .iter()
+                .filter_map(|p| match p.value {
+                    // OTLP's integers are signed; a total beyond that is a double.
+                    PointValue::Counter(v) => Some(number(
+                        p,
+                        i64::try_from(v).map_or(Number::AsDouble(v as f64), Number::AsInt),
+                        start,
+                    )),
+                    _ => None,
+                })
+                .collect(),
+            aggregation_temporality: CUMULATIVE,
+            is_monotonic: true,
+        }),
+        Some(PointValue::Gauge(_)) => Data::Gauge(metrics::Gauge {
+            data_points: family
+                .points
+                .iter()
+                .filter_map(|p| match p.value {
+                    PointValue::Gauge(v) => Some(number(p, Number::AsDouble(v), 0)),
+                    _ => None,
+                })
+                .collect(),
+        }),
+        _ => Data::Histogram(metrics::Histogram {
+            data_points: family
+                .points
+                .iter()
+                .filter_map(|p| match &p.value {
+                    PointValue::Histogram(h) => Some(metrics::HistogramDataPoint {
+                        attributes: point_attributes(p),
+                        start_time_unix_nano: start,
+                        time_unix_nano: time,
+                        count: h.count(),
+                        sum: Some(h.sum),
+                        bucket_counts: h.bucket_counts.clone(),
+                        explicit_bounds: h.bounds.to_vec(),
+                        exemplars: h
+                            .exemplars
+                            .iter()
+                            .flatten()
+                            .map(exemplar_to_proto)
+                            .collect(),
+                        flags: 0,
+                        min: h.min,
+                        max: h.max,
+                    }),
+                    _ => None,
+                })
+                .collect(),
+            aggregation_temporality: CUMULATIVE,
+        }),
+    };
+    metrics::Metric {
+        name: family.name.clone(),
+        description: family.description.clone().unwrap_or_default(),
+        unit: family.unit.clone().unwrap_or_default(),
+        metadata: Vec::new(),
+        data: Some(data),
+    }
+}
+
+/// A series' attributes. The `metrics` facade's labels are strings; the
+/// overflow series' marker is the boolean the specification defines.
+fn point_attributes(point: &Point) -> Vec<common::KeyValue> {
+    point
+        .attributes
+        .iter()
+        .map(|(k, v)| {
+            let value = if k == OVERFLOW_ATTRIBUTE && v == "true" {
+                Value::Bool(true)
+            } else {
+                Value::String(v.clone())
+            };
+            key_value(&KeyValue::new(k.clone(), value))
+        })
+        .collect()
+}
+
+fn exemplar_to_proto(e: &Exemplar) -> metrics::Exemplar {
+    metrics::Exemplar {
+        filtered_attributes: Vec::new(),
+        time_unix_nano: unix_nanos(e.time),
+        span_id: e.span_id.map(|s| s.to_bytes().to_vec()).unwrap_or_default(),
+        trace_id: e
+            .trace_id
+            .map(|t| t.to_bytes().to_vec())
+            .unwrap_or_default(),
+        value: Some(metrics::exemplar::Value::AsDouble(e.value)),
     }
 }
 
