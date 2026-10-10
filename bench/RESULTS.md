@@ -6,6 +6,7 @@ _Phase 0, measured 2026-10-09._
 
 - **Traces:** oxtel's `tracing` layer against `tracing-opentelemetry` 0.34 over `opentelemetry_sdk` 0.33. "`tracing` alone" is the registry with no layer: the floor.
 - **Metrics:** oxtel's `metrics` recorder against `opentelemetry_sdk` 0.33 and `metrics-exporter-prometheus` 0.18, the most used `metrics` backend.
+- **Logs** (added 2026-10-10): oxtel's log layer against `opentelemetry-appender-tracing` 0.33 over `opentelemetry_sdk` 0.33.
 
 **Environment:** Apple M4 Pro (10 performance and 4 efficiency cores), 24 GiB RAM, macOS 26.6.2, rustc 1.94.1, release builds. It's a laptop with other work running, so absolute numbers vary; the comparisons hold across repeated runs except where noted.
 
@@ -47,6 +48,20 @@ Median from criterion, with its 95% confidence interval. "vs oxtel" above 1 mean
 
 **Exemplars** (oxtel only, since the official Rust SDK doesn't record them): a histogram recorded inside a sampled span costs 6.1 ns with exemplars off and 54.9 ns with them on. The difference is reading the span context and timestamping the exemplar. It applies only to measurements inside sampled spans, under the default `trace_based` filter.
 
+## Logs: cost per event on the instrumented thread
+
+Both stacks use a processor that drops each record. Inside a span, both also run their trace layer (oxtel's, and `tracing-opentelemetry`), so records carry the span's trace context. A test in `bench/src/lib.rs` checks that both stacks really attach it, since the comparison is meaningless otherwise.
+
+| Workload | `tracing` alone | oxtel | opentelemetry-appender-tracing | vs oxtel |
+|---|---|---|---|---|
+| Event with 3 fields and a message | 6.4 ns | 100–103 ns | **95–100 ns** | 0.95–0.97× |
+| Span with an event in it | 66–69 ns | **523–567 ns** | 857–911 ns | 1.61–1.64× |
+
+Ranges are over two runs.
+
+- **A bare event is at parity**, within 3–5%. Both stacks make the same 2 heap allocations per event, for the message and the string value, 15 bytes in all; a test in `bench/tests/allocations.rs` keeps it that way. Before this, oxtel also allocated a `Vec` for each record's attributes and took 111 ns against 95 ns. Records now keep up to four attributes inline.
+- **Inside a span, oxtel is about 1.6× faster**, mostly because its span is cheaper. That's the usual case in a service: a request's span with its log lines.
+
 ## End to end: OTLP/HTTP to a receiver
 
 Four threads, each stack's batch processor at its defaults (queue 2048, batch 512), OTLP/HTTP protobuf to a receiver in another process, median of 3 runs. CPU per span is the child process's user and system time divided by spans produced. Peak heap is the child's live heap above its warmed-up level.
@@ -85,6 +100,7 @@ Phase 0's gate was "oxtel equal or better on overhead". It passes.
 - **Traces:** oxtel is better in every case, by 1.5 to 7 times.
 - **Metrics:** better or equal everywhere. The one gap, a contended series, is closed by contention-adaptive counters.
 - **End to end:** more throughput, less CPU, bounded memory.
+- **Logs** (added after Phase 0): at parity for a bare event, and 1.6× faster for an event inside a span.
 
 ## Follow-ups
 

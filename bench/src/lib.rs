@@ -95,6 +95,117 @@ pub fn otel_traces(sampled: bool) -> (opentelemetry_sdk::trace::SdkTracerProvide
     (provider, dispatch)
 }
 
+// ─── Logs ───────────────────────────────────────────────────
+
+/// A log processor that drops each record, isolating the cost on the
+/// instrumented thread.
+pub struct DiscardLogs;
+
+impl oxtel_sdk::logs::LogProcessor for DiscardLogs {
+    fn on_emit(&self, record: oxtel_sdk::logs::LogRecord) {
+        black_box(record);
+    }
+    fn force_flush(&self) -> Result<(), oxtel_sdk::export::ExportError> {
+        Ok(())
+    }
+    fn shutdown(&self) -> Result<(), oxtel_sdk::export::ExportError> {
+        Ok(())
+    }
+}
+
+/// The same, for the official SDK.
+#[derive(Debug)]
+pub struct OtelDiscardLogs;
+
+impl opentelemetry_sdk::logs::LogProcessor for OtelDiscardLogs {
+    fn emit(
+        &self,
+        data: &mut opentelemetry_sdk::logs::SdkLogRecord,
+        _scope: &opentelemetry::InstrumentationScope,
+    ) {
+        black_box(data);
+    }
+    fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+        Ok(())
+    }
+}
+
+/// The providers a log setup needs kept alive.
+pub struct LogPipelines<T, L>(pub Option<T>, pub L);
+
+/// oxtel's log layer, with its trace layer when records should carry
+/// trace context.
+pub fn oxtel_logs(
+    with_traces: bool,
+) -> (
+    LogPipelines<oxtel_sdk::trace::TracerProvider, oxtel_sdk::logs::LoggerProvider>,
+    Dispatch,
+) {
+    let logs = oxtel_sdk::logs::LoggerProvider::builder()
+        .with_resource(oxtel_sdk::Resource::builder().without_env().build())
+        .with_processor(DiscardLogs)
+        .build();
+    if with_traces {
+        let (traces, _) = oxtel_traces(true);
+        let dispatch = Dispatch::new(
+            tracing_subscriber::registry()
+                .with(traces.layer())
+                .with(logs.layer()),
+        );
+        (LogPipelines(Some(traces), logs), dispatch)
+    } else {
+        let dispatch = Dispatch::new(tracing_subscriber::registry().with(logs.layer()));
+        (LogPipelines(None, logs), dispatch)
+    }
+}
+
+/// `opentelemetry-appender-tracing` over the official SDK, with
+/// `tracing-opentelemetry` when records should carry trace context.
+pub fn otel_logs(
+    with_traces: bool,
+) -> (
+    LogPipelines<
+        opentelemetry_sdk::trace::SdkTracerProvider,
+        opentelemetry_sdk::logs::SdkLoggerProvider,
+    >,
+    Dispatch,
+) {
+    otel_logs_with(with_traces, OtelDiscardLogs)
+}
+
+/// [`otel_logs`] with the given processor.
+pub fn otel_logs_with(
+    with_traces: bool,
+    processor: impl opentelemetry_sdk::logs::LogProcessor + 'static,
+) -> (
+    LogPipelines<
+        opentelemetry_sdk::trace::SdkTracerProvider,
+        opentelemetry_sdk::logs::SdkLoggerProvider,
+    >,
+    Dispatch,
+) {
+    let logs = opentelemetry_sdk::logs::SdkLoggerProvider::builder()
+        .with_log_processor(processor)
+        .build();
+    let bridge = opentelemetry_appender_tracing::layer::OpenTelemetryTracingBridge::new(&logs);
+    if with_traces {
+        let traces = opentelemetry_sdk::trace::SdkTracerProvider::builder()
+            .with_sampler(opentelemetry_sdk::trace::Sampler::AlwaysOn)
+            .with_span_processor(OtelDiscardSpans)
+            .build();
+        let layer = tracing_opentelemetry::layer()
+            .with_tracer(traces.tracer("bench"))
+            .with_location(false)
+            .with_threads(false)
+            .with_tracked_inactivity(false);
+        let dispatch = Dispatch::new(tracing_subscriber::registry().with(layer).with(bridge));
+        (LogPipelines(Some(traces), logs), dispatch)
+    } else {
+        let dispatch = Dispatch::new(tracing_subscriber::registry().with(bridge));
+        (LogPipelines(None, logs), dispatch)
+    }
+}
+
 // ─── Metrics ────────────────────────────────────────────────
 
 /// oxtel's recorder, with exemplars off unless asked for.
@@ -229,5 +340,57 @@ fn serve(stream: std::net::TcpStream, latency: Duration, spans: &AtomicU64, requ
         if writer.write_all(reply).is_err() {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    /// Keeps whether each record carried a trace id.
+    #[derive(Debug, Default, Clone)]
+    struct TraceIds(Arc<Mutex<Vec<bool>>>);
+
+    impl opentelemetry_sdk::logs::LogProcessor for TraceIds {
+        fn emit(
+            &self,
+            data: &mut opentelemetry_sdk::logs::SdkLogRecord,
+            _scope: &opentelemetry::InstrumentationScope,
+        ) {
+            self.0.lock().unwrap().push(data.trace_context().is_some());
+        }
+        fn force_flush(&self) -> opentelemetry_sdk::error::OTelSdkResult {
+            Ok(())
+        }
+    }
+
+    /// The comparison is fair only if both stacks attach trace context to
+    /// records made inside a span.
+    #[test]
+    fn both_stacks_attach_trace_context_inside_spans() {
+        let ids = TraceIds::default();
+        let (_otel, dispatch) = otel_logs_with(true, ids.clone());
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info_span!("op").in_scope(|| tracing::info!("inside"));
+            tracing::info!("outside");
+        });
+        assert_eq!(*ids.0.lock().unwrap(), vec![true, false]);
+
+        let exporter = oxtel_sdk::logs::InMemoryLogExporter::default();
+        let logs = oxtel_sdk::logs::LoggerProvider::builder()
+            .with_resource(oxtel_sdk::Resource::builder().without_env().build())
+            .with_simple_exporter(exporter.clone())
+            .build();
+        let (traces, _) = oxtel_traces(true);
+        let dispatch = Dispatch::new(
+            tracing_subscriber::registry()
+                .with(traces.layer())
+                .with(logs.layer()),
+        );
+        tracing::dispatcher::with_default(&dispatch, || {
+            tracing::info_span!("op").in_scope(|| tracing::info!("inside"));
+        });
+        assert!(exporter.records()[0].trace_id.is_some());
     }
 }

@@ -78,6 +78,7 @@ Against `tracing-opentelemetry` with the official `opentelemetry_sdk` 0.33, and 
 | Same, not sampled | 84 ns | 589 ns |
 | Counter, attributes on each call | 13 ns | 23 ns |
 | Counter, 8 threads on one series | 0.4 ns | 20–58 ns |
+| Log event inside a span | 523 ns | 857 ns |
 | End to end, spans exported per second | 158k | 83k |
 
 ## How it's checked

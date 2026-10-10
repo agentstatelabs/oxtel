@@ -7,7 +7,7 @@ use std::time::SystemTime;
 use crate::context::TraceFlags;
 use crate::id::{SpanId, TraceId};
 use crate::trace::Scope;
-use crate::value::{KeyValue, Value};
+use crate::value::{Attributes, Value};
 
 /// How severe a log record is: OpenTelemetry's severity number, from 1
 /// (`TRACE`) to 24 (`FATAL4`). Each of the six ranges has four steps, so
@@ -81,7 +81,7 @@ pub struct LogRecord {
     /// The message: the event's `message` field.
     pub body: Option<Value>,
     /// The event's other fields.
-    pub attributes: Vec<KeyValue>,
+    pub attributes: Attributes,
     /// Attributes dropped by the attribute limit.
     pub dropped_attributes: u32,
     /// The event's name, when it was given one with `name:` in the `tracing`

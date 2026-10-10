@@ -22,7 +22,7 @@ pub mod value;
 pub use context::{SpanContext, TraceFlags, TraceState};
 pub use id::{SpanId, TraceId};
 pub use resource::Resource;
-pub use value::{Key, KeyValue, Value};
+pub use value::{Attributes, Key, KeyValue, Value};
 
 use std::cell::Cell;
 
