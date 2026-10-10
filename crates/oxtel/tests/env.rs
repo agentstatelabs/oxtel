@@ -23,6 +23,7 @@ fn child(name: &str, vars: &[(&str, &str)]) -> Output {
         "OTEL_SERVICE_NAME",
         "OTEL_RESOURCE_ATTRIBUTES",
         "OXTEL_LOG_FORMAT",
+        "OXTEL_LOG_OUTPUT",
         "OTEL_CONFIG_FILE",
         "OTEL_EXPORTER_OTLP_ENDPOINT",
         "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
@@ -145,6 +146,60 @@ fn nothing_is_exported_until_configured() {
         return;
     }
     child("nothing_is_exported_until_configured", &[]);
+}
+
+#[test]
+fn logs_are_written_locally_by_default() {
+    if in_child() {
+        let _guard = oxtel::init().expect("install");
+        tracing::info_span!("request", http.route = "/items")
+            .in_scope(|| tracing::warn!(key = "items", "slow lookup"));
+        return;
+    }
+    // Captured output isn't a terminal, so it's JSON, with the span's ids.
+    let output = child("logs_are_written_locally_by_default", &[]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let line = stderr
+        .lines()
+        .find(|l| l.contains("slow lookup"))
+        .unwrap_or_else(|| panic!("no log line: {stderr}"));
+    assert!(line.starts_with(r#"{"timestamp":""#), "{line}");
+    assert!(line.contains(r#""trace_id":""#), "{line}");
+    assert!(
+        line.ends_with(r#""http.route":"/items","key":"items"}"#),
+        "{line}"
+    );
+}
+
+#[test]
+fn the_environment_moves_or_reshapes_local_logs() {
+    if in_child() {
+        let _guard = oxtel::builder().install().expect("install");
+        tracing::warn!("moved");
+        return;
+    }
+    let output = child(
+        "the_environment_moves_or_reshapes_local_logs",
+        &[("OXTEL_LOG_OUTPUT", "stdout"), ("OXTEL_LOG_FORMAT", "text")],
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(" WARN env: moved"), "{stdout}");
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("moved"));
+}
+
+#[test]
+fn a_program_can_turn_local_logs_off() {
+    if in_child() {
+        let _guard = oxtel::builder()
+            .without_local_logs()
+            .install()
+            .expect("install");
+        tracing::warn!("unheard");
+        return;
+    }
+    let output = child("a_program_can_turn_local_logs_off", &[]);
+    assert!(!String::from_utf8_lossy(&output.stderr).contains("unheard"));
+    assert!(!String::from_utf8_lossy(&output.stdout).contains("unheard"));
 }
 
 #[test]

@@ -13,6 +13,34 @@ pub enum Exporter {
     Prometheus,
 }
 
+/// Where local log lines go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LogOutput {
+    /// Standard error, the default. Standard output is left alone, since
+    /// it's the protocol channel for MCP servers over stdio and the data
+    /// channel for command-line tools.
+    #[default]
+    Stderr,
+    /// Standard output.
+    Stdout,
+}
+
+/// The local log output asked for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Local {
+    /// Text on a terminal, flat JSON otherwise.
+    Auto,
+    Format(LocalFormat),
+    Off,
+}
+
+/// `OXTEL_LOG_FORMAT` and `OXTEL_LOG_OUTPUT`, where set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct LocalEnv {
+    pub(crate) format: Option<Local>,
+    pub(crate) output: Option<LogOutput>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Signal {
     Traces,
@@ -40,21 +68,21 @@ pub(crate) struct EnvConfig {
     pub(crate) logs: Vec<Exporter>,
     pub(crate) trace_context: bool,
     pub(crate) prometheus_addr: String,
-    /// `OXTEL_LOG_FORMAT`, if set: a format, or `None` for `none`.
-    pub(crate) local_format: Option<Option<LocalFormat>>,
+    pub(crate) local: LocalEnv,
     pub(crate) warnings: Vec<String>,
 }
 
 impl EnvConfig {
-    /// `OXTEL_LOG_FORMAT` alone, for a configuration from a file.
+    /// `OXTEL_LOG_FORMAT` and `OXTEL_LOG_OUTPUT` alone, with their
+    /// warnings, for a configuration from a file.
     #[cfg(feature = "config")]
-    pub(crate) fn local_format_from_env() -> Option<Option<LocalFormat>> {
-        let mut c = Self::from_lookup(|name| {
-            (name == "OXTEL_LOG_FORMAT")
+    pub(crate) fn local_from_env() -> (LocalEnv, Vec<String>) {
+        let c = Self::from_lookup(|name| {
+            matches!(name, "OXTEL_LOG_FORMAT" | "OXTEL_LOG_OUTPUT")
                 .then(|| std::env::var(name).ok())
                 .flatten()
         });
-        c.local_format.take()
+        (c.local, c.warnings)
     }
 
     pub(crate) fn from_env() -> Self {
@@ -160,19 +188,33 @@ impl EnvConfig {
             format!("{host}:{port}")
         };
 
-        let local_format = get("OXTEL_LOG_FORMAT").and_then(|v| {
-            if v.trim().eq_ignore_ascii_case("none") {
-                return Some(None);
+        let format = get("OXTEL_LOG_FORMAT").and_then(|v| {
+            match v.trim().to_ascii_lowercase().as_str() {
+                "auto" => return Some(Local::Auto),
+                "none" => return Some(Local::Off),
+                _ => {}
             }
             let format = LocalFormat::from_name(&v);
             if format.is_none() {
                 warnings.push(format!(
-                    "OXTEL_LOG_FORMAT={} isn't text, json, ecs or none; ignored",
+                    "OXTEL_LOG_FORMAT={} isn't auto, text, json, ecs or none; ignored",
                     v.trim()
                 ));
             }
-            format.map(Some)
+            format.map(Local::Format)
         });
+        let output =
+            get("OXTEL_LOG_OUTPUT").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+                "stderr" => Some(LogOutput::Stderr),
+                "stdout" => Some(LogOutput::Stdout),
+                _ => {
+                    warnings.push(format!(
+                        "OXTEL_LOG_OUTPUT={} isn't stderr or stdout; ignored",
+                        v.trim()
+                    ));
+                    None
+                }
+            });
 
         EnvConfig {
             disabled,
@@ -181,7 +223,7 @@ impl EnvConfig {
             logs,
             trace_context,
             prometheus_addr,
-            local_format,
+            local: LocalEnv { format, output },
             warnings,
         }
     }
@@ -210,7 +252,7 @@ mod tests {
                 logs: vec![],
                 trace_context: true,
                 prometheus_addr: "localhost:9464".into(),
-                local_format: None,
+                local: LocalEnv::default(),
                 warnings: vec![],
             }
         );
@@ -286,18 +328,24 @@ mod tests {
     }
 
     #[test]
-    fn the_local_format_can_be_chosen_or_turned_off() {
+    fn local_logs_can_be_shaped_moved_or_turned_off() {
+        let format = |v: &str| config(&[("OXTEL_LOG_FORMAT", v)]).local.format;
+        assert_eq!(format("ECS"), Some(Local::Format(LocalFormat::Ecs)));
+        assert_eq!(format(" auto "), Some(Local::Auto));
+        assert_eq!(format("none"), Some(Local::Off));
+        let output = |v: &str| config(&[("OXTEL_LOG_OUTPUT", v)]).local.output;
+        assert_eq!(output("STDOUT"), Some(LogOutput::Stdout));
+        assert_eq!(output("stderr"), Some(LogOutput::Stderr));
+
+        let c = config(&[("OXTEL_LOG_FORMAT", "pretty"), ("OXTEL_LOG_OUTPUT", "file")]);
+        assert_eq!(c.local, LocalEnv::default(), "left to the program");
         assert_eq!(
-            config(&[("OXTEL_LOG_FORMAT", "ECS")]).local_format,
-            Some(Some(LocalFormat::Ecs))
+            c.warnings,
+            vec![
+                "OXTEL_LOG_FORMAT=pretty isn't auto, text, json, ecs or none; ignored",
+                "OXTEL_LOG_OUTPUT=file isn't stderr or stdout; ignored",
+            ]
         );
-        assert_eq!(
-            config(&[("OXTEL_LOG_FORMAT", "none")]).local_format,
-            Some(None)
-        );
-        let c = config(&[("OXTEL_LOG_FORMAT", "pretty")]);
-        assert_eq!(c.local_format, None, "left to the program");
-        assert_eq!(c.warnings.len(), 1);
     }
 
     #[test]

@@ -4,13 +4,13 @@
 use oxtel_prometheus::Options as PrometheusOptions;
 use oxtel_sdk::console::ConsoleExporter;
 use oxtel_sdk::export::{BatchConfig, ExportError};
-use oxtel_sdk::logs::{LocalFormat, LogExporter, LogLimits, LogRecord};
+use oxtel_sdk::logs::{LogExporter, LogLimits, LogRecord};
 use oxtel_sdk::metrics::{ExemplarFilter, MetricExporter, MetricFamily, PeriodicReaderConfig};
 use oxtel_sdk::resource::{Detector, ResourceBuilder};
 use oxtel_sdk::trace::{Sampler, SpanData, SpanExporter, SpanLimits};
 use oxtel_sdk::{KeyValue, Resource};
 
-use crate::config::{EnvConfig, Exporter};
+use crate::config::{EnvConfig, Exporter, LocalEnv};
 
 #[cfg(feature = "otlp")]
 pub(crate) type Otlp = oxtel_otlp::OtlpHttpExporter;
@@ -95,8 +95,8 @@ pub(crate) struct Plan {
     pub(crate) readers: Vec<Reader>,
     pub(crate) exemplar_filter: Option<ExemplarFilter>,
     pub(crate) cardinality_limit: Option<usize>,
-    /// `OXTEL_LOG_FORMAT`, if set.
-    pub(crate) local_format: Option<Option<LocalFormat>>,
+    /// `OXTEL_LOG_FORMAT` and `OXTEL_LOG_OUTPUT`, where set.
+    pub(crate) local: LocalEnv,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -201,7 +201,7 @@ impl Plan {
             readers,
             exemplar_filter: None,
             cardinality_limit: None,
-            local_format: env.local_format,
+            local: env.local,
             warnings,
         }
     }
@@ -213,7 +213,7 @@ impl Plan {
     pub(crate) fn from_config(
         parsed: oxtel_config::Parsed,
         programmed: Programmed,
-        local_format: Option<Option<LocalFormat>>,
+        local: LocalEnv,
     ) -> Plan {
         use oxtel_config::{ProcessorConfig, ReaderConfig};
 
@@ -369,7 +369,7 @@ impl Plan {
             readers,
             exemplar_filter: Some(exemplar_filter),
             cardinality_limit: mp.cardinality_limit,
-            local_format,
+            local,
             warnings,
         }
     }

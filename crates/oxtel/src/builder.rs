@@ -2,7 +2,7 @@
 //! choices.
 
 use std::fmt;
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::time::Duration;
 
 use oxtel_prometheus::{PrometheusExporter, PrometheusServer};
@@ -16,7 +16,7 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
-use crate::config::EnvConfig;
+use crate::config::{EnvConfig, Local, LocalEnv, LogOutput};
 use crate::filter::LogFilter;
 use crate::guard::Guard;
 use crate::plan::{Plan, Proc, Programmed, Reader};
@@ -46,7 +46,8 @@ pub struct Builder {
     pull_metrics: bool,
     sdk_metrics: bool,
     shutdown_timeout: Duration,
-    local_format: Option<LocalFormat>,
+    local: Local,
+    local_output: LogOutput,
     local_filter: Option<String>,
     local_writer: Option<Box<dyn Write + Send>>,
 }
@@ -69,7 +70,8 @@ impl Default for Builder {
             pull_metrics: false,
             sdk_metrics: false,
             shutdown_timeout: Duration::from_secs(5),
-            local_format: None,
+            local: Local::Auto,
+            local_output: LogOutput::Stderr,
             local_filter: None,
             local_writer: None,
         }
@@ -184,12 +186,27 @@ impl Builder {
         self
     }
 
-    /// Also write each event locally, to standard error, in `format`: text
-    /// for people, or flat or ECS JSON for log shippers. `OXTEL_LOG_FORMAT`
-    /// (`text`, `json`, `ecs` or `none`) overrides it. Local output keeps
+    /// Write local log lines in `format`: text for people, or flat or ECS
+    /// JSON for log shippers. Without this, lines are text when they go to
+    /// a terminal and flat JSON otherwise. `OXTEL_LOG_FORMAT` (`auto`,
+    /// `text`, `json`, `ecs` or `none`) overrides it. Local output keeps
     /// working when `OTEL_SDK_DISABLED` turns the rest off.
     pub fn with_local_logs(mut self, format: LocalFormat) -> Self {
-        self.local_format = Some(format);
+        self.local = Local::Format(format);
+        self
+    }
+
+    /// Don't write log lines locally, unless `OXTEL_LOG_FORMAT` asks for
+    /// them.
+    pub fn without_local_logs(mut self) -> Self {
+        self.local = Local::Off;
+        self
+    }
+
+    /// Write local log lines to `output`. Default: standard error.
+    /// `OXTEL_LOG_OUTPUT` (`stderr` or `stdout`) overrides it.
+    pub fn with_local_logs_output(mut self, output: LogOutput) -> Self {
+        self.local_output = output;
         self
     }
 
@@ -199,7 +216,8 @@ impl Builder {
         self
     }
 
-    /// Write local output to `out` instead of standard error.
+    /// Write local log lines to `out` instead, as flat JSON unless a format
+    /// is chosen. `OXTEL_LOG_OUTPUT` overrides it.
     pub fn with_local_logs_writer(mut self, out: impl Write + Send + 'static) -> Self {
         self.local_writer = Some(Box::new(out));
         self
@@ -243,7 +261,10 @@ impl Builder {
             Some(path) => {
                 let parsed = oxtel_config::from_file(path.trim())
                     .map_err(|e| Error::Config(e.to_string()))?;
-                Plan::from_config(parsed, programmed, EnvConfig::local_format_from_env())
+                let (local, local_warnings) = EnvConfig::local_from_env();
+                let mut plan = Plan::from_config(parsed, programmed, local);
+                plan.warnings.extend(local_warnings);
+                plan
             }
             #[cfg(not(feature = "config"))]
             Some(_) => {
@@ -268,21 +289,18 @@ impl Builder {
             readers,
             exemplar_filter,
             cardinality_limit,
-            local_format: env_local_format,
+            local: env_local,
             mut warnings,
         } = plan;
 
-        let local_format = match env_local_format {
-            Some(choice) => choice,
-            None => self.local_format,
-        };
-        let local = |events: Targets, spans: Targets, writer: Option<Box<dyn Write + Send>>| {
-            local_format.map(|format| {
-                let mut layer = LocalLayer::new(format).with_resource(&resource);
-                if let Some(out) = writer {
-                    layer = layer.with_writer(out);
-                }
-                layer.with_filter(LogFilter { events, spans }).boxed()
+        let local_out = local_output(env_local, self.local, self.local_output, self.local_writer);
+        let local = |events: Targets, spans: Targets| {
+            local_out.map(|(format, out)| {
+                LocalLayer::new(format)
+                    .with_resource(&resource)
+                    .with_writer(out)
+                    .with_filter(LogFilter { events, spans })
+                    .boxed()
             })
         };
         let local_directives = directives(
@@ -292,11 +310,7 @@ impl Builder {
         );
         if disabled {
             let mut layers: Vec<BoxedLayer> = Vec::new();
-            layers.extend(local(
-                local_directives.clone(),
-                local_directives,
-                self.local_writer,
-            ));
+            layers.extend(local(local_directives.clone(), local_directives));
             layers.extend(self.layers);
             return Ok(Telemetry {
                 dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),
@@ -408,11 +422,7 @@ impl Builder {
                     .boxed(),
             );
         }
-        layers.extend(local(
-            local_directives,
-            traces_directives,
-            self.local_writer,
-        ));
+        layers.extend(local(local_directives, traces_directives));
         layers.extend(self.layers);
         Ok(Telemetry {
             dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),
@@ -428,6 +438,35 @@ impl Builder {
             trace_context,
         })
     }
+}
+
+/// The format and destination of local log lines, or `None` for none.
+/// The environment's choices win over the program's; `auto` means text
+/// for a terminal and flat JSON for anything else.
+fn local_output(
+    env: LocalEnv,
+    programmed: Local,
+    output: LogOutput,
+    writer: Option<Box<dyn Write + Send>>,
+) -> Option<(LocalFormat, Box<dyn Write + Send>)> {
+    let stream = |output| -> (Box<dyn Write + Send>, bool) {
+        match output {
+            LogOutput::Stderr => (Box::new(std::io::stderr()), std::io::stderr().is_terminal()),
+            LogOutput::Stdout => (Box::new(std::io::stdout()), std::io::stdout().is_terminal()),
+        }
+    };
+    let (out, terminal) = match (env.output, writer) {
+        (Some(output), _) => stream(output),
+        (None, Some(writer)) => (writer, false),
+        (None, None) => stream(output),
+    };
+    let format = match env.format.unwrap_or(programmed) {
+        Local::Off => return None,
+        Local::Format(format) => format,
+        Local::Auto if terminal => LocalFormat::Text,
+        Local::Auto => LocalFormat::Json,
+    };
+    Some((format, out))
 }
 
 /// `explicit` directives, else `RUST_LOG`, else `info`. Directives that
