@@ -178,9 +178,14 @@ fn the_summary_names_each_destination() {
         assert_eq!(
             telemetry.summary(),
             "log lines: standard error, as JSON; \
-             traces: OTLP to http://collector.invalid:4318/v1/traces; \
-             metrics: OTLP/JSON to http://collector.invalid:4318/v1/metrics; \
+             traces: http://collector.invalid:4318/v1/traces (OTLP); \
+             metrics: http://collector.invalid:4318/v1/metrics (OTLP/JSON); \
              logs: not exported"
+        );
+        assert!(
+            telemetry.warnings().is_empty(),
+            "{:?}",
+            telemetry.warnings()
         );
         return;
     }
@@ -226,6 +231,64 @@ fn a_program_can_turn_local_logs_off() {
     let output = child("a_program_can_turn_local_logs_off", &[]);
     assert!(!String::from_utf8_lossy(&output.stderr).contains("unheard"));
     assert!(!String::from_utf8_lossy(&output.stdout).contains("unheard"));
+}
+
+#[test]
+#[cfg(feature = "otlp")]
+fn a_failed_export_says_so_locally() {
+    if in_child() {
+        let guard = oxtel::init().expect("install");
+        tracing::info_span!("request").in_scope(|| {});
+        // Shutting down sends the span, which fails.
+        let _ = guard.shutdown();
+        return;
+    }
+    // Nothing listens on port 1, so the connection is refused at once.
+    let output = child(
+        "a_failed_export_says_so_locally",
+        &[
+            (
+                "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+                "http://127.0.0.1:1/v1/traces",
+            ),
+            ("OTEL_EXPORTER_OTLP_TIMEOUT", "300"),
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(
+            r#""level":"WARN","target":"oxtel","message":"couldn't send 1 span to http://127.0.0.1:1/v1/traces (OTLP): "#
+        ),
+        "{stderr}"
+    );
+    assert!(stderr.contains("Is the receiver running, and reachable from here?"));
+}
+
+#[test]
+#[cfg(feature = "otlp")]
+fn the_grpc_port_gets_a_warning() {
+    if in_child() {
+        let telemetry = oxtel::builder()
+            .with_shutdown_timeout(std::time::Duration::from_millis(100))
+            .build()
+            .expect("build");
+        assert_eq!(
+            telemetry.warnings(),
+            [
+                "http://collector.invalid:4317/v1/traces (OTLP) uses port 4317, where collectors \
+              take OTLP over gRPC, which oxtel doesn't speak yet; OTLP over HTTP is usually on \
+              port 4318"
+            ]
+        );
+        return;
+    }
+    child(
+        "the_grpc_port_gets_a_warning",
+        &[(
+            "OTEL_EXPORTER_OTLP_ENDPOINT",
+            "http://collector.invalid:4317",
+        )],
+    );
 }
 
 #[test]

@@ -77,7 +77,7 @@ Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapp
 
 ## When something's wrong
 
-Start with the line oxtel logs when it starts, from the target `oxtel`. It says where log lines go and where traces, metrics and logs are sent. Any setting oxtel couldn't use is logged right after it, as a warning.
+Start with what oxtel logs from the target `oxtel`. When it starts, one line says where log lines go and where traces, metrics and logs are sent, and any setting it couldn't use follows as a warning. When sending fails, a warning says where, why and what to check, at most once a minute per kind of telemetry, and another line says when sending works again. These lines appear in your local logs, but are never sent to the collector themselves.
 
 ### No log lines at all
 
@@ -89,7 +89,8 @@ Start with the line oxtel logs when it starts, from the target `oxtel`. It says 
 ### Nothing arrives at the collector or backend
 
 - **No endpoint is set.** The startup line says `not exported`. Set `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- **Wrong port.** oxtel speaks OTLP over HTTP, usually on port 4318. Port 4317 is OTLP over gRPC, which oxtel doesn't speak yet.
+- **Wrong port.** oxtel speaks OTLP over HTTP, usually on port 4318. Port 4317 is OTLP over gRPC, which oxtel doesn't speak yet; it warns at startup if you point it there.
+- **The receiver refuses it.** A warning such as `refused with status 401` means the credentials are wrong or missing: check `OTEL_EXPORTER_OTLP_HEADERS`. Status 404 means nothing receives data at that path.
 - **Wrong path.** With the general endpoint, oxtel adds `/v1/traces`, `/v1/metrics` and `/v1/logs` itself. A signal's own endpoint, such as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, is used exactly as given, so it needs the full path. The startup line shows the URLs in full.
 - **The program exits too soon.** Data is sent in batches. Keep the guard until the end of `main`, and dropping it sends what's left, waiting up to 5 seconds.
 

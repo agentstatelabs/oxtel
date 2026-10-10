@@ -8,6 +8,10 @@
 
 use std::net::SocketAddr;
 
+use oxtel_sdk::logs::LogExporter;
+use oxtel_sdk::metrics::MetricExporter;
+use oxtel_sdk::trace::SpanExporter;
+
 use crate::plan::{Proc, Sink};
 
 /// The kinds of telemetry, in the order the line names them.
@@ -26,27 +30,13 @@ impl Kind {
             Kind::Logs => "logs",
         }
     }
-
-    #[cfg(feature = "otlp")]
-    fn otlp(self) -> oxtel_otlp::Signal {
-        match self {
-            Kind::Traces => oxtel_otlp::Signal::Traces,
-            Kind::Metrics => oxtel_otlp::Signal::Metrics,
-            Kind::Logs => oxtel_otlp::Signal::Logs,
-        }
-    }
 }
 
 /// Somewhere telemetry goes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Dest {
-    /// OTLP to `url`, in JSON if `json`.
-    #[cfg_attr(not(feature = "otlp"), allow(dead_code))]
-    Otlp {
-        url: String,
-        json: bool,
-    },
-    Stdout,
+    /// An exporter, as it describes itself.
+    Exporter(String),
     Prometheus(SocketAddr),
     /// Whatever the program's own hooks set up.
     Program,
@@ -54,19 +44,11 @@ pub(crate) enum Dest {
 
 impl Dest {
     pub(crate) fn of_sink(sink: &Sink, kind: Kind) -> Dest {
-        match sink {
-            #[cfg(feature = "otlp")]
-            Sink::Otlp(o) => Dest::Otlp {
-                url: o.url(kind.otlp()).to_string(),
-                json: o.protocol(kind.otlp()) == oxtel_otlp::Protocol::HttpJson,
-            },
-            #[cfg(not(feature = "otlp"))]
-            Sink::Otlp(o) => match *o {},
-            Sink::Console(_) => {
-                let _ = kind;
-                Dest::Stdout
-            }
-        }
+        Dest::Exporter(match kind {
+            Kind::Traces => SpanExporter::destination(sink),
+            Kind::Metrics => MetricExporter::destination(sink),
+            Kind::Logs => LogExporter::destination(sink),
+        })
     }
 
     pub(crate) fn of_proc(proc: &Proc, kind: Kind) -> Dest {
@@ -75,11 +57,14 @@ impl Dest {
         }
     }
 
+    /// Port 4317 is where collectors take OTLP over gRPC.
+    pub(crate) fn uses_the_grpc_port(&self) -> bool {
+        matches!(self, Dest::Exporter(d) if d.contains(":4317/") && d.contains("(OTLP"))
+    }
+
     fn describe(&self) -> String {
         match self {
-            Dest::Otlp { url, json: false } => format!("OTLP to {}", shown_url(url)),
-            Dest::Otlp { url, json: true } => format!("OTLP/JSON to {}", shown_url(url)),
-            Dest::Stdout => "standard output".into(),
+            Dest::Exporter(destination) => destination.clone(),
             Dest::Prometheus(addr) => {
                 format!("a Prometheus scrape endpoint at http://{addr}/metrics")
             }
@@ -157,31 +142,12 @@ fn list(items: &[&str]) -> String {
     }
 }
 
-/// `url` without credentials, a query or a fragment, which can carry
-/// secrets.
-fn shown_url(url: &str) -> String {
-    let url = url.split(['?', '#']).next().unwrap_or(url);
-    match url.split_once("://") {
-        Some((scheme, rest)) => {
-            let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
-            let host = authority
-                .rsplit_once('@')
-                .map_or(authority, |(_, host)| host);
-            format!("{scheme}://{host}{path}")
-        }
-        None => url.to_string(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn otlp(path: &str) -> Dest {
-        Dest::Otlp {
-            url: format!("http://localhost:4318{path}"),
-            json: false,
-        }
+        Dest::Exporter(format!("http://localhost:4318{path} (OTLP)"))
     }
 
     #[test]
@@ -201,14 +167,14 @@ mod tests {
     fn each_kind_names_where_it_goes() {
         let summary = Summary {
             local: Some("standard error, as text".into()),
-            traces: vec![otlp("/v1/traces"), Dest::Stdout],
+            traces: vec![otlp("/v1/traces"), Dest::Exporter("standard output".into())],
             metrics: vec![Dest::Prometheus("127.0.0.1:9464".parse().unwrap())],
             ..Summary::default()
         };
         assert_eq!(
             summary.line(),
             "log lines: standard error, as text; \
-             traces: OTLP to http://localhost:4318/v1/traces and standard output; \
+             traces: http://localhost:4318/v1/traces (OTLP) and standard output; \
              metrics: a Prometheus scrape endpoint at http://127.0.0.1:9464/metrics; \
              logs: not exported"
         );
@@ -218,15 +184,14 @@ mod tests {
     fn a_configuration_file_or_a_disabled_sdk_is_named() {
         let summary = Summary {
             config_file: Some("otel.yaml".into()),
-            logs: vec![Dest::Otlp {
-                url: "https://collector/v1/logs".into(),
-                json: true,
-            }],
+            logs: vec![Dest::Exporter(
+                "https://collector/v1/logs (OTLP/JSON)".into(),
+            )],
             ..Summary::default()
         };
         assert_eq!(
             summary.line(),
-            "configured by otel.yaml; log lines: off; logs: OTLP/JSON to https://collector/v1/logs; \
+            "configured by otel.yaml; log lines: off; logs: https://collector/v1/logs (OTLP/JSON); \
              traces and metrics: not exported"
         );
         let summary = Summary {
@@ -242,12 +207,9 @@ mod tests {
     }
 
     #[test]
-    fn urls_are_shown_without_secrets() {
-        assert_eq!(
-            shown_url("https://user:token@collector:4318/v1/traces?api-key=x#f"),
-            "https://collector:4318/v1/traces"
-        );
-        assert_eq!(shown_url("http://collector:4318"), "http://collector:4318");
-        assert_eq!(shown_url("collector:4318"), "collector:4318");
+    fn the_grpc_port_is_noticed() {
+        assert!(Dest::Exporter("http://c:4317/v1/traces (OTLP)".into()).uses_the_grpc_port());
+        assert!(!otlp("/v1/traces").uses_the_grpc_port());
+        assert!(!Dest::Exporter("standard output".into()).uses_the_grpc_port());
     }
 }

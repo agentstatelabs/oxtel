@@ -75,10 +75,10 @@ To see traces on your own machine, run Jaeger and open http://localhost:16686:
 docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
 ```
 
-Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs one line saying what it set up, so there's no guessing:
+Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs one line saying what it set up, and if sending fails, it says so and what to check, so there's no guessing:
 
 ```text
-INFO oxtel: log lines: standard error, as text; traces: OTLP to http://localhost:4318/v1/traces; metrics: OTLP to http://localhost:4318/v1/metrics; logs: OTLP to http://localhost:4318/v1/logs
+INFO oxtel: log lines: standard error, as text; traces: http://localhost:4318/v1/traces (OTLP); metrics: http://localhost:4318/v1/metrics (OTLP); logs: http://localhost:4318/v1/logs (OTLP)
 ```
 
 The [guide](docs/guide.md) has the few terms worth knowing, recipes (Prometheus, Elastic, hosted backends, MCP servers) and what to do when nothing shows up.

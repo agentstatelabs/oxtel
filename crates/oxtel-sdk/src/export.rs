@@ -54,14 +54,27 @@ pub struct ProcessorStats {
     pub dropped: u64,
 }
 
-#[derive(Default)]
+/// Counts what happened to a processor's items, and says so when exports
+/// fail or items are dropped.
 pub(crate) struct Counters {
     exported: AtomicU64,
     export_failed: AtomicU64,
     dropped: AtomicU64,
+    reporter: Reporter,
 }
 
 impl Counters {
+    /// Counters for items called `what` (singular and plural, such as
+    /// `("span", "spans")`), exported to `destination`.
+    pub(crate) fn new(what: (&'static str, &'static str), destination: String) -> Self {
+        Counters {
+            exported: AtomicU64::new(0),
+            export_failed: AtomicU64::new(0),
+            dropped: AtomicU64::new(0),
+            reporter: Reporter::new(what, destination),
+        }
+    }
+
     pub(crate) fn snapshot(&self) -> ProcessorStats {
         ProcessorStats {
             exported: self.exported.load(Ordering::Relaxed),
@@ -74,6 +87,13 @@ impl Counters {
         self.dropped.fetch_add(1, Ordering::Relaxed);
     }
 
+    /// Drop one item because the queue is full, and say so, at most once a
+    /// minute.
+    pub(crate) fn drop_queue_full(&self) {
+        let dropped = self.dropped.fetch_add(1, Ordering::Relaxed) + 1;
+        self.reporter.queue_full(dropped);
+    }
+
     /// Run one export of `n` items with oxtel's own telemetry suppressed,
     /// count how it went, and return its result.
     pub(crate) fn export(
@@ -82,11 +102,175 @@ impl Counters {
         export: impl FnOnce() -> Result<(), ExportError>,
     ) -> Result<(), ExportError> {
         let result = crate::suppress(export);
-        match result {
-            Ok(()) => self.exported.fetch_add(n as u64, Ordering::Relaxed),
-            Err(_) => self.export_failed.fetch_add(n as u64, Ordering::Relaxed),
-        };
+        match &result {
+            Ok(()) => {
+                self.exported.fetch_add(n as u64, Ordering::Relaxed);
+                self.reporter.succeeded();
+            }
+            Err(e) => {
+                self.export_failed.fetch_add(n as u64, Ordering::Relaxed);
+                self.reporter.failed(n as u64, e);
+            }
+        }
         result
+    }
+}
+
+/// How long the [`Reporter`] stays quiet after a warning.
+const QUIET: Duration = Duration::from_secs(60);
+
+/// Says, in plain words and at most once a minute, when exports fail, when
+/// they work again, and when a full queue drops items. These are warnings
+/// with the target `oxtel`, raised with oxtel's own telemetry suppressed, so
+/// local output shows them but they're never exported.
+struct Reporter {
+    what: (&'static str, &'static str),
+    destination: String,
+    /// Whether the last export failed: the cheap check on success.
+    failing: AtomicBool,
+    state: Mutex<FailureState>,
+    started: Instant,
+    /// When the next queue-full warning may be given, in milliseconds
+    /// after `started`.
+    next_drop_warning: AtomicU64,
+}
+
+#[derive(Default)]
+struct FailureState {
+    /// A warning was given since the last success.
+    warned: bool,
+    last_warning: Option<Instant>,
+    /// Items lost since the last message.
+    lost: u64,
+}
+
+impl Reporter {
+    fn new(what: (&'static str, &'static str), destination: String) -> Self {
+        Reporter {
+            what,
+            destination,
+            failing: AtomicBool::new(false),
+            state: Mutex::new(FailureState::default()),
+            started: Instant::now(),
+            next_drop_warning: AtomicU64::new(0),
+        }
+    }
+
+    fn items(&self, n: u64) -> String {
+        let (one, many) = self.what;
+        format!("{n} {}", if n == 1 { one } else { many })
+    }
+
+    fn failed(&self, n: u64, error: &ExportError) {
+        if *error == ExportError::Shutdown {
+            return;
+        }
+        self.failing.store(true, Ordering::Relaxed);
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.lost += n;
+        let now = Instant::now();
+        if state
+            .last_warning
+            .is_some_and(|t| now.duration_since(t) < QUIET)
+        {
+            return;
+        }
+        let (_, many) = self.what;
+        let destination = &self.destination;
+        let (why, check) = explain(error);
+        let message = if state.warned {
+            format!(
+                "still can't send {many} to {destination}: {why} (lost since the last warning: {})",
+                self.items(state.lost)
+            )
+        } else {
+            format!(
+                "couldn't send {} to {destination}: {why}{check}",
+                self.items(state.lost)
+            )
+        };
+        state.warned = true;
+        state.last_warning = Some(now);
+        state.lost = 0;
+        drop(state);
+        crate::suppress(|| tracing::warn!(target: "oxtel", "{message}"));
+    }
+
+    fn succeeded(&self) {
+        if !self.failing.swap(false, Ordering::Relaxed) {
+            return;
+        }
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        if !std::mem::take(&mut state.warned) {
+            return;
+        }
+        let lost = std::mem::take(&mut state.lost);
+        drop(state);
+        let (_, many) = self.what;
+        let destination = &self.destination;
+        let message = if lost == 0 {
+            format!("sending {many} to {destination} again")
+        } else {
+            format!(
+                "sending {many} to {destination} again (lost meanwhile: {})",
+                self.items(lost)
+            )
+        };
+        crate::suppress(|| tracing::info!(target: "oxtel", "{message}"));
+    }
+
+    fn queue_full(&self, dropped: u64) {
+        let now = u64::try_from(self.started.elapsed().as_millis()).unwrap_or(u64::MAX);
+        let next = self.next_drop_warning.load(Ordering::Relaxed);
+        let quiet = u64::try_from(QUIET.as_millis()).unwrap_or(u64::MAX);
+        if now < next
+            || self
+                .next_drop_warning
+                .compare_exchange(
+                    next,
+                    now.saturating_add(quiet),
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                )
+                .is_err()
+        {
+            return;
+        }
+        let (_, many) = self.what;
+        let message = format!(
+            "dropping {many}: they're made faster than they can be sent to {} (dropped so far: {})",
+            self.destination,
+            self.items(dropped)
+        );
+        crate::suppress(|| tracing::warn!(target: "oxtel", "{message}"));
+    }
+}
+
+/// What went wrong, and what to check, in plain words.
+fn explain(error: &ExportError) -> (String, &'static str) {
+    match error {
+        ExportError::Transport(e) => (
+            e.clone(),
+            ". Is the receiver running, and reachable from here?",
+        ),
+        ExportError::Timeout => (
+            "no answer in time".into(),
+            ". Is the receiver overloaded, or far away?",
+        ),
+        ExportError::Rejected { status, message } => {
+            let why = if message.trim().is_empty() {
+                format!("refused with status {status}")
+            } else {
+                format!("refused with status {status} ({})", message.trim())
+            };
+            let check = match status {
+                401 | 403 => ". Check the credentials; for OTLP, OTEL_EXPORTER_OTLP_HEADERS",
+                404 => ". Nothing receives data at that address; check its path",
+                _ => "",
+            };
+            (why, check)
+        }
+        ExportError::Shutdown => ("the exporter is shut down".into(), ""),
     }
 }
 
@@ -164,6 +348,8 @@ impl BatchConfig {
 pub(crate) trait BatchSink<T>: Send + 'static {
     fn export(&self, batch: &[T]) -> Result<(), ExportError>;
     fn shutdown(&self);
+    /// Where the batches go, for people.
+    fn destination(&self) -> String;
 }
 
 enum Message<T> {
@@ -187,12 +373,13 @@ pub(crate) struct Batcher<T: Send + 'static> {
 impl<T: Send + 'static> Batcher<T> {
     pub(crate) fn new(
         thread: &str,
+        what: (&'static str, &'static str),
         metrics: ProcessorMetrics,
         config: BatchConfig,
         sink: impl BatchSink<T>,
     ) -> Self {
         let (sender, receiver) = mpsc::sync_channel(config.max_queue_size.max(1));
-        let counters = Arc::new(Counters::default());
+        let counters = Arc::new(Counters::new(what, sink.destination()));
         let metrics = Arc::new(metrics);
         let (worker_counters, worker_metrics) = (Arc::clone(&counters), Arc::clone(&metrics));
         let timeout = config.export_timeout;
@@ -222,7 +409,7 @@ impl<T: Send + 'static> Batcher<T> {
         match self.sender.try_send(Message::Item(Box::new(item))) {
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
-                self.counters.drop_one();
+                self.counters.drop_queue_full();
                 self.metrics.dropped("queue_full");
             }
             Err(TrySendError::Disconnected(_)) => {
@@ -323,5 +510,93 @@ fn run<T>(
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+    /// Each event as `LEVEL target message`.
+    #[derive(Clone, Default)]
+    struct Lines(Arc<Mutex<Vec<String>>>);
+
+    impl<S: tracing::Subscriber> Layer<S> for Lines {
+        fn on_event(&self, event: &tracing::Event<'_>, _: Context<'_, S>) {
+            struct Message(String);
+            impl tracing::field::Visit for Message {
+                fn record_debug(&mut self, field: &tracing::field::Field, v: &dyn fmt::Debug) {
+                    if field.name() == "message" {
+                        self.0 = format!("{v:?}");
+                    }
+                }
+            }
+            let mut message = Message(String::new());
+            event.record(&mut message);
+            let meta = event.metadata();
+            self.0.lock().unwrap().push(format!(
+                "{} {} {}",
+                meta.level(),
+                meta.target(),
+                message.0
+            ));
+        }
+    }
+
+    #[test]
+    fn failures_are_told_once_then_quietly_counted_until_recovery() {
+        let lines = Lines::default();
+        let subscriber = tracing_subscriber::registry().with(lines.clone());
+        tracing::subscriber::with_default(subscriber, || {
+            let counters = Counters::new(
+                ("span", "spans"),
+                "http://collector:4318/v1/traces (OTLP)".into(),
+            );
+            let refused = || Err(ExportError::Transport("connection refused".into()));
+            let _ = counters.export(3, refused);
+            let _ = counters.export(2, refused);
+            let _ = counters.export(1, || Ok(()));
+            let _ = counters.export(1, || Ok(()));
+            let _ = counters.export(4, || Err(ExportError::Shutdown));
+            counters.drop_queue_full();
+            counters.drop_queue_full();
+            assert_eq!(
+                counters.snapshot(),
+                ProcessorStats {
+                    exported: 2,
+                    export_failed: 9,
+                    dropped: 2
+                }
+            );
+        });
+        assert_eq!(
+            *lines.0.lock().unwrap(),
+            [
+                "WARN oxtel couldn't send 3 spans to http://collector:4318/v1/traces (OTLP): \
+                 connection refused. Is the receiver running, and reachable from here?",
+                "INFO oxtel sending spans to http://collector:4318/v1/traces (OTLP) again \
+                 (lost meanwhile: 2 spans)",
+                "WARN oxtel dropping spans: they're made faster than they can be sent to \
+                 http://collector:4318/v1/traces (OTLP) (dropped so far: 1 span)",
+            ]
+        );
+    }
+
+    #[test]
+    fn refusals_say_what_to_check() {
+        let refused = |status| ExportError::Rejected {
+            status,
+            message: " bad key ".into(),
+        };
+        assert_eq!(
+            explain(&refused(401)),
+            (
+                "refused with status 401 (bad key)".to_string(),
+                ". Check the credentials; for OTLP, OTEL_EXPORTER_OTLP_HEADERS"
+            )
+        );
+        assert!(explain(&refused(404)).1.contains("check its path"));
+        assert_eq!(explain(&ExportError::Timeout).0, "no answer in time");
     }
 }

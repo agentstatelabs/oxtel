@@ -54,10 +54,10 @@ impl SimpleSpanProcessor {
     /// A processor exporting through `exporter`.
     pub fn new(exporter: impl SpanExporter, resource: Resource) -> Self {
         SimpleSpanProcessor {
+            counters: Counters::new(("span", "spans"), exporter.destination()),
             exporter: Box::new(exporter),
             resource,
             shut_down: AtomicBool::new(false),
-            counters: Counters::default(),
         }
     }
 }
@@ -103,6 +103,10 @@ impl<E: SpanExporter> BatchSink<SpanData> for Sink<E> {
     fn shutdown(&self) {
         let _ = self.exporter.shutdown();
     }
+
+    fn destination(&self) -> String {
+        self.exporter.destination()
+    }
 }
 
 /// Queues spans and exports them in batches from its own thread. A full
@@ -118,6 +122,7 @@ impl BatchSpanProcessor {
         BatchSpanProcessor {
             batcher: Batcher::new(
                 "oxtel-span-export",
+                ("span", "spans"),
                 ProcessorMetrics::new(
                     "batching_span_processor",
                     "otel.sdk.processor.span.processed",

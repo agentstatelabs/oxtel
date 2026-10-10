@@ -39,6 +39,16 @@ impl SpanExporter for Sink {
             Sink::Console(c) => SpanExporter::export(c, batch, resource),
         }
     }
+
+    fn destination(&self) -> String {
+        match self {
+            #[cfg(feature = "otlp")]
+            Sink::Otlp(o) => SpanExporter::destination(o),
+            #[cfg(not(feature = "otlp"))]
+            Sink::Otlp(o) => match *o {},
+            Sink::Console(c) => SpanExporter::destination(c),
+        }
+    }
 }
 
 impl LogExporter for Sink {
@@ -51,6 +61,16 @@ impl LogExporter for Sink {
             Sink::Console(c) => LogExporter::export(c, batch, resource),
         }
     }
+
+    fn destination(&self) -> String {
+        match self {
+            #[cfg(feature = "otlp")]
+            Sink::Otlp(o) => LogExporter::destination(o),
+            #[cfg(not(feature = "otlp"))]
+            Sink::Otlp(o) => match *o {},
+            Sink::Console(c) => LogExporter::destination(c),
+        }
+    }
 }
 
 impl MetricExporter for Sink {
@@ -61,6 +81,16 @@ impl MetricExporter for Sink {
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
             Sink::Console(c) => MetricExporter::export(c, metrics, resource),
+        }
+    }
+
+    fn destination(&self) -> String {
+        match self {
+            #[cfg(feature = "otlp")]
+            Sink::Otlp(o) => MetricExporter::destination(o),
+            #[cfg(not(feature = "otlp"))]
+            Sink::Otlp(o) => match *o {},
+            Sink::Console(c) => MetricExporter::destination(c),
         }
     }
 }

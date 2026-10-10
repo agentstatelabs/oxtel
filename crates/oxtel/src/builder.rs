@@ -444,6 +444,16 @@ impl Builder {
         if let Some(server) = &prometheus {
             summary.metrics.push(Dest::Prometheus(server.local_addr()));
         }
+        let grpc_port = [&summary.traces, &summary.metrics, &summary.logs]
+            .into_iter()
+            .flatten()
+            .find(|d| d.uses_the_grpc_port());
+        if let Some(Dest::Exporter(destination)) = grpc_port {
+            warnings.push(format!(
+                "{destination} uses port 4317, where collectors take OTLP over gRPC, which oxtel \
+                 doesn't speak yet; OTLP over HTTP is usually on port 4318"
+            ));
+        }
 
         let mut layers: Vec<BoxedLayer> = vec![
             traces

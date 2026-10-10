@@ -72,7 +72,10 @@ impl PeriodicReader {
         config: PeriodicReaderConfig,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
-        let counters = Arc::new(Counters::default());
+        let counters = Arc::new(Counters::new(
+            ("metric point", "metric points"),
+            exporter.destination(),
+        ));
         let worker_counters = Arc::clone(&counters);
         let worker = std::thread::Builder::new()
             .name("oxtel-metric-export".into())

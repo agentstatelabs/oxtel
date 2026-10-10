@@ -190,6 +190,17 @@ impl OtlpHttpExporter {
         &self.inner.targets[signal as usize].url
     }
 
+    /// Where `signal` goes, for people: its URL without credentials, a
+    /// query or a fragment, and the encoding, such as
+    /// `http://collector:4318/v1/traces (OTLP)`.
+    pub fn destination(&self, signal: Signal) -> String {
+        let encoding = match self.protocol(signal) {
+            Protocol::HttpProtobuf => "OTLP",
+            Protocol::HttpJson => "OTLP/JSON",
+        };
+        format!("{} ({encoding})", shown_url(self.url(signal)))
+    }
+
     /// How `signal`'s request bodies are encoded.
     pub fn protocol(&self, signal: Signal) -> Protocol {
         if self.inner.targets[signal as usize].json {
@@ -598,6 +609,10 @@ impl SpanExporter for OtlpHttpExporter {
             &traces_request(batch, resource),
         )
     }
+
+    fn destination(&self) -> String {
+        OtlpHttpExporter::destination(self, Signal::Traces)
+    }
 }
 
 impl LogExporter for OtlpHttpExporter {
@@ -606,6 +621,10 @@ impl LogExporter for OtlpHttpExporter {
             return Ok(());
         }
         self.send(Signal::Logs, batch.len(), &logs_request(batch, resource))
+    }
+
+    fn destination(&self) -> String {
+        OtlpHttpExporter::destination(self, Signal::Logs)
     }
 }
 
@@ -616,6 +635,26 @@ impl MetricExporter for OtlpHttpExporter {
         }
         let points = metrics.iter().map(|m| m.points.len()).sum();
         self.send(Signal::Metrics, points, &metrics_request(metrics, resource))
+    }
+
+    fn destination(&self) -> String {
+        OtlpHttpExporter::destination(self, Signal::Metrics)
+    }
+}
+
+/// `url` without credentials, a query or a fragment, which can carry
+/// secrets.
+fn shown_url(url: &str) -> String {
+    let url = url.split(['?', '#']).next().unwrap_or(url);
+    match url.split_once("://") {
+        Some((scheme, rest)) => {
+            let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+            let host = authority
+                .rsplit_once('@')
+                .map_or(authority, |(_, host)| host);
+            format!("{scheme}://{host}{path}")
+        }
+        None => url.to_string(),
     }
 }
 
@@ -628,6 +667,28 @@ fn jitter(d: Duration) -> Duration {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn destinations_are_shown_without_secrets() {
+        assert_eq!(
+            shown_url("https://user:token@collector:4318/v1/traces?api-key=x#f"),
+            "https://collector:4318/v1/traces"
+        );
+        assert_eq!(shown_url("http://collector:4318"), "http://collector:4318");
+        assert_eq!(shown_url("collector:4318"), "collector:4318");
+        let exporter = OtlpHttpExporterBuilder::new()
+            .with_endpoint("http://me:secret@collector:4318")
+            .with_url(Signal::Logs, "http://collector:4318/logs?token=t")
+            .build();
+        assert_eq!(
+            SpanExporter::destination(&exporter),
+            "http://collector:4318/v1/traces (OTLP)"
+        );
+        assert_eq!(
+            LogExporter::destination(&exporter),
+            "http://collector:4318/logs (OTLP)"
+        );
+    }
 
     #[test]
     fn urls_follow_the_specification() {

@@ -28,6 +28,7 @@ use crate::value::{KeyValue, Value};
 #[derive(Clone)]
 pub struct ConsoleExporter {
     out: Arc<Mutex<Box<dyn Write + Send>>>,
+    place: &'static str,
 }
 
 impl Default for ConsoleExporter {
@@ -39,13 +40,17 @@ impl Default for ConsoleExporter {
 impl ConsoleExporter {
     /// Write to standard output.
     pub fn stdout() -> Self {
-        ConsoleExporter::to_writer(std::io::stdout())
+        ConsoleExporter {
+            place: "standard output",
+            ..ConsoleExporter::to_writer(std::io::stdout())
+        }
     }
 
     /// Write to `out`.
     pub fn to_writer(out: impl Write + Send + 'static) -> Self {
         ConsoleExporter {
             out: Arc::new(Mutex::new(Box::new(out))),
+            place: "the program's writer",
         }
     }
 
@@ -136,6 +141,10 @@ fn attributes(out: &mut String, kvs: &[KeyValue]) {
 }
 
 impl SpanExporter for ConsoleExporter {
+    fn destination(&self) -> String {
+        self.place.into()
+    }
+
     fn export(&self, batch: &[SpanData], _resource: &Resource) -> Result<(), ExportError> {
         let mut text = String::new();
         for span in batch {
@@ -184,6 +193,10 @@ impl SpanExporter for ConsoleExporter {
 }
 
 impl LogExporter for ConsoleExporter {
+    fn destination(&self) -> String {
+        self.place.into()
+    }
+
     fn export(&self, batch: &[LogRecord], _resource: &Resource) -> Result<(), ExportError> {
         let mut text = String::new();
         for record in batch {
@@ -215,6 +228,10 @@ impl LogExporter for ConsoleExporter {
 }
 
 impl MetricExporter for ConsoleExporter {
+    fn destination(&self) -> String {
+        self.place.into()
+    }
+
     fn export(&self, metrics: &[MetricFamily], _resource: &Resource) -> Result<(), ExportError> {
         let mut text = String::new();
         for family in metrics {
