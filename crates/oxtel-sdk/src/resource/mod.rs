@@ -1,6 +1,14 @@
 //! The resource: attributes describing what produced the telemetry, such as
 //! `service.name`.
 
+mod detect;
+
+pub use detect::{
+    ContainerDetector, Detector, HostDetector, KubernetesDetector, OsDetector, ProcessDetector,
+    ServiceInstanceDetector, container_id_from_cgroup, container_id_from_mountinfo,
+    detectors_from_env, os_release, pod_uid_from_cgroup,
+};
+
 use crate::value::{KeyValue, Value, upsert};
 
 /// Attributes that describe the entity producing telemetry.
@@ -45,15 +53,17 @@ impl Resource {
 /// Builds a [`Resource`].
 ///
 /// Precedence, highest first: attributes set on the builder; then
-/// `OTEL_SERVICE_NAME`; then `OTEL_RESOURCE_ATTRIBUTES`; then a default
-/// service name set with [`ResourceBuilder::with_default_service_name`];
-/// then `unknown_service:<executable>`.
-#[derive(Debug)]
+/// `OTEL_SERVICE_NAME`; then `OTEL_RESOURCE_ATTRIBUTES`; then what the
+/// detectors found (see [`detectors_from_env`]); then a default service
+/// name set with [`ResourceBuilder::with_default_service_name`]; then
+/// `unknown_service:<executable>`.
 pub struct ResourceBuilder {
     attributes: Vec<KeyValue>,
     default_service_name: Option<String>,
     schema_url: Option<String>,
     read_env: bool,
+    builtin_detectors: bool,
+    detectors: Vec<Box<dyn Detector>>,
 }
 
 impl Default for ResourceBuilder {
@@ -63,6 +73,8 @@ impl Default for ResourceBuilder {
             default_service_name: None,
             schema_url: None,
             read_env: true,
+            builtin_detectors: true,
+            detectors: Vec::new(),
         }
     }
 }
@@ -92,9 +104,32 @@ impl ResourceBuilder {
         self
     }
 
-    /// Don't read `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`.
+    /// Don't read `OTEL_SERVICE_NAME` or `OTEL_RESOURCE_ATTRIBUTES`, and
+    /// don't run the built-in detectors: the resource is exactly what the
+    /// builder says, as tests want.
     pub fn without_env(mut self) -> Self {
         self.read_env = false;
+        self.builtin_detectors = false;
+        self
+    }
+
+    /// Don't run the built-in detectors. Detectors added with
+    /// [`with_detector`](ResourceBuilder::with_detector) still run.
+    pub fn without_detectors(mut self) -> Self {
+        self.builtin_detectors = false;
+        self
+    }
+
+    /// Run `detector` too, after the built-in ones. Its attributes rank with
+    /// theirs, below the environment's.
+    pub fn with_detector(self, detector: impl Detector + 'static) -> Self {
+        self.with_boxed_detector(Box::new(detector))
+    }
+
+    /// [`with_detector`](ResourceBuilder::with_detector), for a detector
+    /// already boxed.
+    pub fn with_boxed_detector(mut self, detector: Box<dyn Detector>) -> Self {
+        self.detectors.push(detector);
         self
     }
 
@@ -113,6 +148,16 @@ impl ResourceBuilder {
             format!("unknown_service:{exe}")
         });
         upsert(&mut attributes, KeyValue::new("service.name", service_name));
+        let builtin = if self.builtin_detectors {
+            detectors_from_env()
+        } else {
+            Vec::new()
+        };
+        for detector in builtin.iter().chain(&self.detectors) {
+            for kv in detector.detect() {
+                upsert(&mut attributes, kv);
+            }
+        }
         if self.read_env {
             if let Ok(raw) = std::env::var("OTEL_RESOURCE_ATTRIBUTES") {
                 for kv in parse_resource_attributes(&raw) {
