@@ -27,6 +27,7 @@
 mod data;
 mod export;
 mod layer;
+mod local;
 mod processor;
 mod provider;
 
@@ -34,5 +35,6 @@ pub use crate::export::{BatchConfig, ExportError, ProcessorStats};
 pub use data::{LogRecord, Severity};
 pub use export::{InMemoryLogExporter, LogExporter};
 pub use layer::{LogLayer, LogLimits};
+pub use local::{ECS_VERSION, LocalFormat, LocalLayer};
 pub use processor::{BatchLogProcessor, LogProcessor, NoopLogProcessor, SimpleLogProcessor};
 pub use provider::{LoggerProvider, LoggerProviderBuilder};

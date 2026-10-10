@@ -17,6 +17,12 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **Local log output** (`oxtel_sdk::logs::LocalLayer`): each event as a line, on standard error or a writer of your choice, carrying its span's trace and span ids.
+  - `text`: like `tracing`'s own output: time, level, the span chain with its fields, target, message and fields.
+  - `json`: one flat object per line: `timestamp`, `level`, `target`, `message`, `trace_id`, `span_id`, then every enclosing span's fields (inner wins) and the event's, under their names as written. A field named like a fixed key is written as `fields.<name>`, so lines never repeat a key.
+  - `ecs`: the ecs-logging layout (`@timestamp`, `log.level`, `message`, `ecs.version` first), with `log.logger`, `log.origin.*`, `trace.id`, `span.id` and the resource's `service.name`, `service.version` and `service.environment`.
+  - JSON is written by oxtel itself, with no serde dependency; it stays valid for any value, with control characters escaped and non-finite numbers written as strings.
+  - The facade adds it with `with_local_logs` (and `_filter`, `_writer`), or `OXTEL_LOG_FORMAT`. It keeps working when `OTEL_SDK_DISABLED` turns everything else off.
 - **`oxtel`: one call sets everything up.** `oxtel::init()` builds traces, metrics and logs from the standard environment and installs them as the global `tracing` subscriber and `metrics` recorder. With the `log` feature (on by default), it also forwards the `log` crate's records.
   - `OTEL_SDK_DISABLED`, `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` (`otlp`, `console`, `prometheus` for metrics, `none`), `OTEL_PROPAGATORS` and `OTEL_EXPORTER_PROMETHEUS_HOST`/`_PORT` are honoured. Unsupported values, such as `zipkin`, `b3` or the `grpc` protocol, are logged as warnings with the target `oxtel`, not errors.
   - Spans and log records are filtered by `RUST_LOG`-style directives (`info` by default), separately for each. The log layer sees the spans the trace layer records, so every record carries its span's ids.

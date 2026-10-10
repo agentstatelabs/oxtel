@@ -27,8 +27,8 @@
 //! | Logs | `tracing` events, and `log` records with the `log` feature | `otlp` (default), `console`, `none` |
 //! | Metrics | the `metrics` facade | `otlp` (default), `prometheus`, `console`, `none` |
 //!
-//! - `OTEL_SDK_DISABLED=true` turns all of it off. Layers added with
-//!   [`Builder::with_layer`] still run.
+//! - `OTEL_SDK_DISABLED=true` turns all of it off. Local logs and layers
+//!   added with [`Builder::with_layer`] still run.
 //! - The resource comes from `OTEL_SERVICE_NAME` and
 //!   `OTEL_RESOURCE_ATTRIBUTES`, the sampler from `OTEL_TRACES_SAMPLER`,
 //!   OTLP's endpoint and headers from `OTEL_EXPORTER_OTLP_*`, the Prometheus
@@ -38,6 +38,9 @@
 //!   default; see [`Builder::with_traces_filter`].
 //! - With a log pipeline, events become log records carrying their span's
 //!   ids. Without one, they become span events instead.
+//! - Events can also be written locally, to standard error, as text, flat
+//!   JSON or ECS JSON: see [`Builder::with_local_logs`] and
+//!   `OXTEL_LOG_FORMAT`.
 //! - Settings oxtel can't honour, such as `OTEL_TRACES_EXPORTER=zipkin`, are
 //!   logged as warnings with the target `oxtel`, rather than failing.
 //!

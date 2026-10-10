@@ -1157,6 +1157,7 @@ dependencies = [
  "log",
  "metrics",
  "proptest",
+ "serde_json",
  "tracing",
  "tracing-core",
  "tracing-log",

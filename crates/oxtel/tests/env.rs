@@ -22,6 +22,7 @@ fn child(name: &str, vars: &[(&str, &str)]) -> Output {
         "OTEL_LOGS_EXPORTER",
         "OTEL_SERVICE_NAME",
         "OTEL_RESOURCE_ATTRIBUTES",
+        "OXTEL_LOG_FORMAT",
     ] {
         command.env_remove(var);
     }
@@ -138,5 +139,27 @@ fn init_refuses_to_replace_another_subscriber() {
             ("OTEL_METRICS_EXPORTER", "none"),
             ("OTEL_LOGS_EXPORTER", "none"),
         ],
+    );
+}
+
+#[test]
+fn local_output_survives_a_disabled_sdk_and_follows_oxtel_log_format() {
+    if in_child() {
+        // The program asks for text; the environment says JSON.
+        let _guard = oxtel::builder()
+            .with_local_logs(oxtel::sdk::logs::LocalFormat::Text)
+            .install()
+            .expect("install");
+        tracing::warn!(key = "items", "still visible");
+        return;
+    }
+    let output = child(
+        "local_output_survives_a_disabled_sdk_and_follows_oxtel_log_format",
+        &[("OTEL_SDK_DISABLED", "true"), ("OXTEL_LOG_FORMAT", "json")],
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains(r#""level":"WARN","target":"env","message":"still visible","key":"items""#),
+        "{stderr}"
     );
 }
