@@ -45,9 +45,11 @@
 //!   default; see [`Builder::with_traces_filter`].
 //! - With a log pipeline, events become log records carrying their span's
 //!   ids. Without one, they become span events instead.
-//! - Events can also be written locally, to standard error, as text, flat
-//!   JSON or ECS JSON: see [`Builder::with_local_logs`] and
-//!   `OXTEL_LOG_FORMAT`.
+//! - Events are also written locally, to standard error: readable text
+//!   when that's a terminal, flat JSON with OpenTelemetry field names
+//!   otherwise, for log shippers. `OXTEL_LOG_FORMAT` (`auto`, `text`,
+//!   `json`, `ecs` or `none`) and `OXTEL_LOG_OUTPUT` (`stderr` or `stdout`)
+//!   change that; so do [`Builder::with_local_logs`] and its neighbours.
 //! - Settings oxtel can't honour, such as `OTEL_TRACES_EXPORTER=zipkin`, are
 //!   logged as warnings with the target `oxtel`, rather than failing.
 //!
@@ -63,9 +65,10 @@ mod filter;
 mod guard;
 mod plan;
 pub mod propagation;
+mod summary;
 
 pub use builder::{Builder, Error, Telemetry};
-pub use config::Exporter;
+pub use config::{Exporter, LogOutput};
 pub use guard::Guard;
 
 #[cfg(feature = "otlp")]

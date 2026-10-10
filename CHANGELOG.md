@@ -9,6 +9,14 @@ All notable changes to oxtel are recorded here. The format follows
 ### Changed
 - **Nothing is exported until it's configured.** `oxtel::init()` used to send traces, metrics and logs to `localhost:4318` when no variable was set, as the specification's defaults say. Now a signal exports over OTLP once `OTEL_EXPORTER_OTLP_ENDPOINT` or its own endpoint is set, or when `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` names `otlp`, which still means `localhost:4318` by default. A program that relied on the old default sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. Configuration files are unchanged.
 - With no log pipeline and no span exporter, events are no longer kept as span events that nothing would export.
+- **Logs are written locally by default**, to standard error: readable text when that's a terminal, flat JSON otherwise, so containers and log shippers get JSON with nothing to set. `OXTEL_LOG_FORMAT=none` or `Builder::without_local_logs` turns them off. A writer given to `with_local_logs_writer` gets flat JSON unless a format is chosen.
+
+### Added
+- **A startup line that says what was set up**, in plain words: where log lines go and in what format, and where traces, metrics and logs are sent, or that they aren't and which variable changes that. `install` logs it at `info` with the target `oxtel`, and `Guard::summary` and `Telemetry::summary` return it. Endpoint URLs are shown without credentials or query strings.
+- `OtlpHttpExporter::protocol` and `Protocol::name`.
+- `OXTEL_LOG_FORMAT=auto`, the new default.
+- `OXTEL_LOG_OUTPUT=stderr|stdout` and `Builder::with_local_logs_output(LogOutput::Stdout)`, to move local logs to standard output. Standard error stays the default, since standard output is the protocol channel for MCP servers over stdio.
+- A bad `OXTEL_LOG_FORMAT` or `OXTEL_LOG_OUTPUT` is now reported when a configuration file is in use, too.
 
 ## [0.1.0] - 2026-10-10
 

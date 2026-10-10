@@ -42,8 +42,15 @@ Nothing leaves the process until you say where. Set `OTEL_EXPORTER_OTLP_ENDPOINT
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | the resource |
 | `OTEL_CONFIG_FILE` | a declarative configuration file (schema 1.x) to use instead of the variables below; see [`examples/otel-config.yaml`](examples/otel-config.yaml) |
 | `OTEL_SDK_DISABLED` | `true` turns it all off, except local logs |
-| `OXTEL_LOG_FORMAT` | local logs on standard error: `text`, `json` (flat, OpenTelemetry field names), `ecs` (Elastic Common Schema) or `none`; overrides the program's `with_local_logs` |
+| `OXTEL_LOG_FORMAT` | how local log lines look: `auto` (the default: text on a terminal, JSON otherwise), `text`, `json` (flat, OpenTelemetry field names), `ecs` (Elastic Common Schema) or `none`; overrides the program's choice |
+| `OXTEL_LOG_OUTPUT` | where local log lines go: `stderr` (the default) or `stdout`; overrides the program's choice |
 | `RUST_LOG` | which spans and events are recorded (`info` by default) |
+
+When it starts, oxtel logs one line saying what it set up, so there's no guessing:
+
+```text
+INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+```
 
 Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=console OTEL_METRICS_EXPORTER=console cargo run -p oxtel-examples --example quickstart`. To assemble the pipelines yourself, as a distribution might, see [`examples/manual.rs`](examples/manual.rs).
 
@@ -56,7 +63,7 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 | **Logs** | A `tracing` layer: each event becomes a log record. The level becomes the severity, `message` the body, other fields attributes, and the target the instrumentation scope. Inside a span, the record carries the span's trace and span ids, sampled or not. Events from the `log` crate, forwarded by `tracing-log`, keep their target. |
 | **HTTP** | `oxtel-tower`: layers for tower, axum and hyper servers and clients, following the HTTP conventions. Server spans named by route, continuing the caller's W3C trace, with `http.server.request.duration` and `http.server.active_requests`. Client spans that carry the trace onward, with `http.client.request.duration`. Query strings and URL credentials are never recorded. Also a `/metrics` service for an axum router or hyper server. |
 | **MCP** | `oxtel-rmcp`: an rmcp server wrapped in one line, following the MCP conventions. Spans named `tools/call {tool}` continue the caller's trace from `params._meta`. Tool errors are recorded as `tool_error`, and JSON-RPC errors are classified as the conventions say. Records `mcp.server.operation.duration` and `mcp.server.session.duration`. Client helpers send the trace onward. Tool arguments and results only on request. |
-| **Local logs** | Each event as a line on standard error, beside or instead of export: text for people, flat JSON with fields under their OpenTelemetry names, or ECS JSON for Elastic. Lines carry their span's trace and span ids. |
+| **Local logs** | On by default: each event as a line on standard error, beside or instead of export. Text when that's a terminal, flat JSON with fields under their OpenTelemetry names otherwise, or ECS JSON for Elastic. Lines carry their span's trace and span ids. |
 | **Metrics** | A `metrics` recorder: counters, gauges, histograms, pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` or scraped by Prometheus, or both. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
 | **OTLP** | Traces, metrics and logs over OTLP/HTTP with protobuf or JSON bodies (`OTEL_EXPORTER_OTLP_PROTOCOL`), optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
