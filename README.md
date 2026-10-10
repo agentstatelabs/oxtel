@@ -58,13 +58,13 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 | **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. Serve it from your own HTTP server, or from oxtel's built-in endpoint. |
 | **Console** | Readable lines on standard output for spans, log records and metrics, for development. |
 | **Propagation** | W3C Trace Context and Baggage, parsed strictly. |
+| **Conventions** | `oxtel-semconv`: every attribute name and metric definition in the OpenTelemetry semantic conventions v1.44.0, plus the GenAI and MCP conventions, as Rust constants. Generated with OpenTelemetry Weaver; CI regenerates the code and checks it hasn't drifted. oxtel-tower's and oxtel-rmcp's tests check every attribute and metric they emit against these definitions. |
 | **Config file** | OpenTelemetry declarative configuration (`OTEL_CONFIG_FILE`, schema 1.x): resource and detectors, propagators, sampler, limits, batch and simple processors, OTLP/HTTP and console exporters, periodic readers and the Prometheus endpoint. `${VAR:-default}` substitution is typed the way the spec says. Unsupported parts, such as views or gRPC, are reported as warnings. A file that can't be read stops `init()` with an error that names the field. |
 | **Resources** | Detected at startup, below anything the environment sets: `service.instance.id`, the host's name, architecture and machine id, the OS, the process (but not its command line, which may hold secrets), the container id from cgroup v1 or v2, and the Kubernetes namespace, pod and node. `OTEL_EXPERIMENTAL_RESOURCE_DETECTORS` chooses which run. Distributions add their own detectors. |
 | **Configuration** | The standard `OTEL_*` variables: `OTEL_SDK_DISABLED`, each signal's exporter, the resource, sampler, propagators, batching (`OTEL_BSP_*`, `OTEL_BLRP_*`), attribute limits, the metric export interval and timeout, the Prometheus endpoint, and each signal's OTLP endpoint, headers, compression and timeout. |
 | **Self-observability** | When turned on, oxtel's own pipelines report what they did as `otel.sdk.*` metrics, named by the semantic conventions: items processed, dropped (and why), exported and rejected, and how long exports and collections take. |
 
-**Coming next (Phase 1):**
-- semantic conventions generated with Weaver.
+**Next:** the 0.1 release, and adoption in AgentStateGraph.
 
 After that: OpAMP, gRPC, more instrumentation. See the [design](DESIGN.md).
 

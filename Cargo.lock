@@ -1327,6 +1327,7 @@ dependencies = [
  "http",
  "metrics",
  "oxtel-sdk",
+ "oxtel-semconv",
  "rmcp",
  "serde",
  "serde_json",
@@ -1353,6 +1354,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxtel-semconv"
+version = "0.0.1"
+
+[[package]]
 name = "oxtel-tower"
 version = "0.0.1"
 dependencies = [
@@ -1361,6 +1366,7 @@ dependencies = [
  "metrics",
  "oxtel-prometheus",
  "oxtel-sdk",
+ "oxtel-semconv",
  "pin-project-lite",
  "tokio",
  "tower",

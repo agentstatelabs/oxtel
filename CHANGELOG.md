@@ -15,9 +15,17 @@ All notable changes to oxtel are recorded here. The format follows
 - `ExportError`, `ProcessorStats` and `BatchConfig` live in `oxtel_sdk::export`, shared by every signal. `oxtel_sdk::trace` still re-exports them.
 
 ### Fixed
+- **`oxtel-tower` reported the HTTP `QUERY` method as `_OTHER`.** The conventions list it as a known method since v1.44; the generated constants showed the gap.
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **`oxtel-semconv`: the semantic conventions as Rust constants**, generated with OpenTelemetry Weaver 0.26.1 from semantic-conventions v1.44.0 and, for `genai`, the GenAI and MCP conventions at a pinned commit of semantic-conventions-genai.
+  - `attribute::HTTP_REQUEST_METHOD` and the rest are documented from the conventions themselves, including their well-known values and stability.
+  - `metric::HTTP_SERVER_REQUEST_DURATION` and the rest are `Metric` values: name, instrument, unit, description.
+  - `attribute::is_defined` and `metric::by_name` check names at run time.
+  - Stable conventions are always present; those in development need the `experimental` feature. Deprecated ones are left out. The templates are oxtel's own.
+  - `cargo run -p xtask -- gen-semconv` regenerates the crate. A new CI job, `semconv`, does so with the checksum-verified Weaver release and fails if the committed code differs.
+  - New tests in `oxtel-tower` and `oxtel-rmcp` run real requests and check every attribute and metric label they record against the conventions, and every metric's instrument and unit.
 - **Declarative configuration** (`oxtel-config`, and the facade's `config` feature, on by default). When `OTEL_CONFIG_FILE` names a file, oxtel builds every pipeline from it, and other `OTEL_*` variables count only where the file substitutes them.
   - Schema 1.x: `disabled`; `resource` (typed attributes, `attributes_list`, `schema_url`, `detection/development` detectors); `attribute_limits`; `propagator`; and per signal, limits, samplers (`always_on`, `always_off`, `trace_id_ratio_based`, `parent_based`), `batch` and `simple` processors, OTLP/HTTP and console exporters, periodic readers, the `prometheus/development` pull exporter, `exemplar_filter` and cardinality limits.
   - Environment substitution follows the spec: `${NAME}`, `${env:NAME}`, `${NAME:-default}` and `$$`, in values only. Unquoted values are typed by the YAML 1.2 core schema after substitution; quoted ones stay strings. A substituted value is never read as YAML structure.

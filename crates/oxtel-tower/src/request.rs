@@ -18,6 +18,9 @@ pub(crate) fn method_name(method: &Method) -> (&'static str, Option<&str>) {
         Method::OPTIONS => "OPTIONS",
         Method::TRACE => "TRACE",
         Method::PATCH => "PATCH",
+        // A known method in the conventions since v1.44, though `http` has
+        // no constant for it.
+        _ if method.as_str() == "QUERY" => "QUERY",
         _ => return ("_OTHER", Some(method.as_str())),
     };
     (known, None)
@@ -155,5 +158,7 @@ mod tests {
         assert_eq!(method_name(&Method::GET), ("GET", None));
         let purge = Method::from_bytes(b"PURGE").unwrap();
         assert_eq!(method_name(&purge), ("_OTHER", Some("PURGE")));
+        let query = Method::from_bytes(b"QUERY").unwrap();
+        assert_eq!(method_name(&query), ("QUERY", None));
     }
 }
