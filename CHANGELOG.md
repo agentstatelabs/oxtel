@@ -17,6 +17,13 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **`oxtel-rmcp`: MCP instrumentation for rmcp**, following the OpenTelemetry MCP conventions (development status).
+  - `Instrumented::new(server)` wraps any rmcp server. Each request and notification gets a span named `{mcp.method.name} {target}` (`tools/call commit`), continuing the caller's trace from W3C keys in `params._meta`.
+  - Span attributes: `mcp.method.name`, `jsonrpc.request.id`, `mcp.protocol.version`, `gen_ai.tool.name` with `gen_ai.operation.name` `execute_tool`, `gen_ai.prompt.name`, `mcp.resource.uri` and `network.transport`. Over HTTP, also `mcp.session.id` and `network.protocol.*`.
+  - A tool result with `isError` sets `error.type` `tool_error`. JSON-RPC error codes go in `rpc.response.status_code`. The caller's mistakes (parse errors, unknown methods or tools, invalid params, unknown resources) aren't marked as server failures; other codes set `error.type` and status Error with the message.
+  - `mcp.server.operation.duration` per request, and `mcp.server.session.duration` when a session ends.
+  - With the `client` feature, `client::send` and `client::call_tool` send requests in client spans, writing `traceparent` into `params._meta`, and record `mcp.client.operation.duration`.
+  - Tool arguments and results (`gen_ai.tool.call.arguments`, `.result`) are recorded only with `with_payloads(true)`, cut at 16 KiB.
 - **`oxtel-tower`: HTTP instrumentation** for tower services, and so axum and hyper, following the semantic conventions.
   - `HttpServerLayer`:
     - a span per request named `{method} {route}`, continuing the caller's W3C trace (switchable off at trust boundaries);
