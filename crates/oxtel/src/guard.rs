@@ -23,6 +23,7 @@ pub struct Guard {
     pub(crate) metrics: Option<MeterProvider>,
     pub(crate) prometheus: Option<PrometheusServer>,
     pub(crate) timeout: Duration,
+    pub(crate) summary: String,
 }
 
 impl Guard {
@@ -40,6 +41,12 @@ impl Guard {
     /// `/metrics` from it yourself with `oxtel_prometheus`.
     pub fn meter_provider(&self) -> Option<&MeterProvider> {
         self.metrics.as_ref()
+    }
+
+    /// What was set up, in one line of plain words: where log lines go, and
+    /// where traces, metrics and logs are sent.
+    pub fn summary(&self) -> &str {
+        &self.summary
     }
 
     /// Where the built-in Prometheus endpoint listens, if it runs.

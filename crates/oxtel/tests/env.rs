@@ -11,27 +11,16 @@ const CHILD: &str = "OXTEL_TEST_CHILD";
 /// Run test `name` in a child process with `vars` set.
 fn child(name: &str, vars: &[(&str, &str)]) -> Output {
     let mut command = Command::new(std::env::current_exe().unwrap());
-    command
-        .args(["--exact", name, "--nocapture", "--test-threads=1"])
-        .env(CHILD, "1");
-    for var in [
-        "RUST_LOG",
-        "OTEL_SDK_DISABLED",
-        "OTEL_TRACES_EXPORTER",
-        "OTEL_METRICS_EXPORTER",
-        "OTEL_LOGS_EXPORTER",
-        "OTEL_SERVICE_NAME",
-        "OTEL_RESOURCE_ATTRIBUTES",
-        "OXTEL_LOG_FORMAT",
-        "OXTEL_LOG_OUTPUT",
-        "OTEL_CONFIG_FILE",
-        "OTEL_EXPORTER_OTLP_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
-        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
-    ] {
-        command.env_remove(var);
+    command.args(["--exact", name, "--nocapture", "--test-threads=1"]);
+    // Nothing from the developer's environment leaks in.
+    for (key, _) in std::env::vars_os() {
+        if let Some(key) = key.to_str()
+            && (key.starts_with("OTEL_") || key.starts_with("OXTEL_") || key == "RUST_LOG")
+        {
+            command.env_remove(key);
+        }
     }
+    command.env(CHILD, "1");
     for (k, v) in vars {
         command.env(k, v);
     }
@@ -169,6 +158,43 @@ fn logs_are_written_locally_by_default() {
         line.ends_with(r#""http.route":"/items","key":"items"}"#),
         "{line}"
     );
+    // And it said so.
+    assert!(
+        stderr.contains(
+            r#""level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)""#
+        ),
+        "{stderr}"
+    );
+}
+
+#[test]
+#[cfg(feature = "otlp")]
+fn the_summary_names_each_destination() {
+    if in_child() {
+        let telemetry = oxtel::builder()
+            .with_shutdown_timeout(std::time::Duration::from_millis(100))
+            .build()
+            .expect("build");
+        assert_eq!(
+            telemetry.summary(),
+            "log lines: standard error, as JSON; \
+             traces: OTLP to http://collector.invalid:4318/v1/traces; \
+             metrics: OTLP/JSON to http://collector.invalid:4318/v1/metrics; \
+             logs: not exported"
+        );
+        return;
+    }
+    child(
+        "the_summary_names_each_destination",
+        &[
+            (
+                "OTEL_EXPORTER_OTLP_ENDPOINT",
+                "http://user:secret@collector.invalid:4318",
+            ),
+            ("OTEL_EXPORTER_OTLP_METRICS_PROTOCOL", "http/json"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ],
+    );
 }
 
 #[test]
@@ -245,6 +271,7 @@ fn local_output_survives_a_disabled_sdk_and_follows_oxtel_log_format() {
 }
 
 /// A configuration file in the temporary directory, unique to this run.
+#[cfg(feature = "config")]
 fn config_file(name: &str, text: &str) -> String {
     let path = std::env::temp_dir().join(format!(
         "oxtel-{name}-{}-{}.yaml",
@@ -259,6 +286,7 @@ fn config_file(name: &str, text: &str) -> String {
 }
 
 #[test]
+#[cfg(feature = "config")]
 fn a_configuration_file_replaces_the_environment() {
     if in_child() {
         let guard = oxtel::init().expect("install");
@@ -341,6 +369,7 @@ meter_provider:
 }
 
 #[test]
+#[cfg(feature = "config")]
 fn a_configuration_file_that_cant_be_read_is_an_error() {
     if in_child() {
         let error = oxtel::init().err().expect("an error");

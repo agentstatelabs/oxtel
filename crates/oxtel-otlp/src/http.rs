@@ -84,6 +84,14 @@ impl Protocol {
             _ => None,
         }
     }
+
+    /// The protocol's name: `http/protobuf` or `http/json`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Protocol::HttpProtobuf => "http/protobuf",
+            Protocol::HttpJson => "http/json",
+        }
+    }
 }
 
 /// A request in either encoding, and how to read its response's rejected
@@ -180,6 +188,15 @@ impl OtlpHttpExporter {
     /// The URL `signal` is sent to.
     pub fn url(&self, signal: Signal) -> &str {
         &self.inner.targets[signal as usize].url
+    }
+
+    /// How `signal`'s request bodies are encoded.
+    pub fn protocol(&self, signal: Signal) -> Protocol {
+        if self.inner.targets[signal as usize].json {
+            Protocol::HttpJson
+        } else {
+            Protocol::HttpProtobuf
+        }
     }
 
     /// Items of `signal` (spans, data points, log records) that the

@@ -46,6 +46,12 @@ Nothing leaves the process until you say where. Set `OTEL_EXPORTER_OTLP_ENDPOINT
 | `OXTEL_LOG_OUTPUT` | where local log lines go: `stderr` (the default) or `stdout`; overrides the program's choice |
 | `RUST_LOG` | which spans and events are recorded (`info` by default) |
 
+When it starts, oxtel logs one line saying what it set up, so there's no guessing:
+
+```text
+INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+```
+
 Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=console OTEL_METRICS_EXPORTER=console cargo run -p oxtel-examples --example quickstart`. To assemble the pipelines yourself, as a distribution might, see [`examples/manual.rs`](examples/manual.rs).
 
 ## What works today

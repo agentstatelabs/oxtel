@@ -20,6 +20,7 @@ use crate::config::{EnvConfig, Local, LocalEnv, LogOutput};
 use crate::filter::LogFilter;
 use crate::guard::Guard;
 use crate::plan::{Plan, Proc, Programmed, Reader};
+use crate::summary::{Dest, Kind, Summary};
 
 type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
 type Hook<B> = Box<dyn FnOnce(B) -> B>;
@@ -256,7 +257,7 @@ impl Builder {
         let config_file = std::env::var("OTEL_CONFIG_FILE")
             .ok()
             .filter(|p| !p.trim().is_empty());
-        let plan = match config_file {
+        let plan = match config_file.as_deref() {
             #[cfg(feature = "config")]
             Some(path) => {
                 let parsed = oxtel_config::from_file(path.trim())
@@ -294,8 +295,22 @@ impl Builder {
         } = plan;
 
         let local_out = local_output(env_local, self.local, self.local_output, self.local_writer);
+        let mut summary = Summary {
+            #[cfg(feature = "config")]
+            config_file: config_file.map(|p| p.trim().to_string()),
+            local: local_out.as_ref().map(|(format, _, place)| {
+                let format = match format {
+                    LocalFormat::Text => "text",
+                    LocalFormat::Json => "JSON",
+                    LocalFormat::Ecs => "ECS JSON",
+                };
+                format!("{place}, as {format}")
+            }),
+            disabled,
+            ..Summary::default()
+        };
         let local = |events: Targets, spans: Targets| {
-            local_out.map(|(format, out)| {
+            local_out.map(|(format, out, _)| {
                 LocalLayer::new(format)
                     .with_resource(&resource)
                     .with_writer(out)
@@ -321,6 +336,7 @@ impl Builder {
                     metrics: None,
                     prometheus: None,
                     timeout: self.shutdown_timeout,
+                    summary: summary.line(),
                 },
                 warnings,
                 trace_context: false,
@@ -329,6 +345,26 @@ impl Builder {
 
         let traces_directives = directives("traces", self.traces_filter, &mut warnings);
         let logs_directives = directives("logs", self.logs_filter, &mut warnings);
+
+        let dests = |procs: &[Proc], kind, hooks: bool| {
+            let mut dests: Vec<Dest> = procs.iter().map(|p| Dest::of_proc(p, kind)).collect();
+            if hooks {
+                dests.push(Dest::Program);
+            }
+            dests
+        };
+        summary.traces = dests(&span_processors, Kind::Traces, !self.trace_hooks.is_empty());
+        summary.logs = dests(&log_processors, Kind::Logs, !self.log_hooks.is_empty());
+        summary.metrics = readers
+            .iter()
+            .filter_map(|r| match r {
+                Reader::Periodic(sink, _) => Some(Dest::of_sink(sink, Kind::Metrics)),
+                Reader::Prometheus { .. } => None,
+            })
+            .collect();
+        if !self.metric_hooks.is_empty() || self.pull_metrics {
+            summary.metrics.push(Dest::Program);
+        }
 
         let logs = (!log_processors.is_empty() || !self.log_hooks.is_empty()).then(|| {
             let mut b = LoggerProvider::builder().with_resource(resource.clone());
@@ -405,6 +441,9 @@ impl Builder {
                 }
                 meters
             });
+        if let Some(server) = &prometheus {
+            summary.metrics.push(Dest::Prometheus(server.local_addr()));
+        }
 
         let mut layers: Vec<BoxedLayer> = vec![
             traces
@@ -433,6 +472,7 @@ impl Builder {
                 metrics,
                 prometheus,
                 timeout: self.shutdown_timeout,
+                summary: summary.line(),
             },
             warnings,
             trace_context,
@@ -448,16 +488,25 @@ fn local_output(
     programmed: Local,
     output: LogOutput,
     writer: Option<Box<dyn Write + Send>>,
-) -> Option<(LocalFormat, Box<dyn Write + Send>)> {
-    let stream = |output| -> (Box<dyn Write + Send>, bool) {
+) -> Option<(LocalFormat, Box<dyn Write + Send>, &'static str)> {
+    type Out = (Box<dyn Write + Send>, bool, &'static str);
+    let stream = |output| -> Out {
         match output {
-            LogOutput::Stderr => (Box::new(std::io::stderr()), std::io::stderr().is_terminal()),
-            LogOutput::Stdout => (Box::new(std::io::stdout()), std::io::stdout().is_terminal()),
+            LogOutput::Stderr => (
+                Box::new(std::io::stderr()),
+                std::io::stderr().is_terminal(),
+                "standard error",
+            ),
+            LogOutput::Stdout => (
+                Box::new(std::io::stdout()),
+                std::io::stdout().is_terminal(),
+                "standard output",
+            ),
         }
     };
-    let (out, terminal) = match (env.output, writer) {
+    let (out, terminal, place) = match (env.output, writer) {
         (Some(output), _) => stream(output),
-        (None, Some(writer)) => (writer, false),
+        (None, Some(writer)) => (writer, false, "the program's writer"),
         (None, None) => stream(output),
     };
     let format = match env.format.unwrap_or(programmed) {
@@ -466,7 +515,7 @@ fn local_output(
         Local::Auto if terminal => LocalFormat::Text,
         Local::Auto => LocalFormat::Json,
     };
-    Some((format, out))
+    Some((format, out, place))
 }
 
 /// `explicit` directives, else `RUST_LOG`, else `info`. Directives that
@@ -509,6 +558,13 @@ impl Telemetry {
         &self.guard
     }
 
+    /// What was set up, in one line of plain words: where log lines go, and
+    /// where traces, metrics and logs are sent. [`install`](Telemetry::install)
+    /// logs it, at `info` with the target `oxtel`.
+    pub fn summary(&self) -> &str {
+        self.guard.summary()
+    }
+
     /// Configuration oxtel couldn't honour, such as an unsupported
     /// exporter. [`install`](Telemetry::install) logs these as warnings.
     pub fn warnings(&self) -> &[String] {
@@ -521,7 +577,8 @@ impl Telemetry {
     }
 
     /// Install the dispatcher and recorder globally, and the bridge from the
-    /// `log` crate with the `log` feature; then log the warnings.
+    /// `log` crate with the `log` feature; then log the
+    /// [summary](Telemetry::summary) and the warnings.
     pub fn install(self) -> Result<Guard, Error> {
         tracing::dispatcher::set_global_default(self.dispatch)
             .map_err(|_| Error::SubscriberAlreadySet)?;
@@ -550,6 +607,7 @@ impl Telemetry {
             }
         }
         crate::propagation::set_trace_context(self.trace_context);
+        tracing::info!(target: "oxtel", "{}", self.guard.summary());
         for warning in &self.warnings {
             tracing::warn!(target: "oxtel", "{warning}");
         }

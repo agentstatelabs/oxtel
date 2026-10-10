@@ -65,6 +65,7 @@ mod filter;
 mod guard;
 mod plan;
 pub mod propagation;
+mod summary;
 
 pub use builder::{Builder, Error, Telemetry};
 pub use config::{Exporter, LogOutput};
