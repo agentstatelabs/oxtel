@@ -194,3 +194,36 @@ fn formats_are_named_text_json_and_ecs() {
     assert_eq!(LocalFormat::from_name("text"), Some(LocalFormat::Text));
     assert_eq!(LocalFormat::from_name("pretty"), None);
 }
+
+#[test]
+fn instrumentation_spans_read_by_their_name_and_otel_fields_stay_out() {
+    let event = || {
+        let user = tracing::info_span!("checkout", cart.items = 3u64);
+        let _user = user.enter();
+        let http = tracing::info_span!(
+            "HTTP server request",
+            otel.name = "GET /orders/{id}",
+            otel.kind = "server",
+            otel.status_code = tracing::field::Empty,
+            http.route = "/orders/{id}",
+        );
+        let _http = http.enter();
+        http.record("otel.status_code", "error");
+        tracing::warn!(order.id = 7u64, "looking up order");
+    };
+
+    let (lines, ()) = capture(LocalLayer::new(LocalFormat::Text), event);
+    let text = &lines[0];
+    assert!(
+        text.contains(" WARN checkout{cart.items=3}: GET /orders/{id}: local: looking up order order.id=7 trace_id="),
+        "{text}"
+    );
+
+    let (lines, ()) = capture(LocalLayer::new(LocalFormat::Json), event);
+    let json = parse(&lines[0]);
+    assert_eq!(json["http.route"], "/orders/{id}", "data fields stay");
+    assert_eq!(json["cart.items"], 3);
+    for control in ["otel.name", "otel.kind", "otel.status_code"] {
+        assert!(json.get(control).is_none(), "{control} in {json}");
+    }
+}
