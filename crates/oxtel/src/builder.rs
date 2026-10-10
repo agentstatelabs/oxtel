@@ -6,7 +6,6 @@ use std::io::Write;
 use std::time::Duration;
 
 use oxtel_prometheus::{PrometheusExporter, PrometheusServer};
-use oxtel_sdk::console::ConsoleExporter;
 use oxtel_sdk::logs::{LocalFormat, LocalLayer, LoggerProvider, LoggerProviderBuilder};
 use oxtel_sdk::metrics::{MeterProvider, MeterProviderBuilder, MetricsRecorder};
 use oxtel_sdk::resource::Detector;
@@ -17,43 +16,10 @@ use tracing_subscriber::filter::Targets;
 use tracing_subscriber::layer::{Layer, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
-use crate::config::{EnvConfig, Exporter};
+use crate::config::EnvConfig;
 use crate::filter::LogFilter;
 use crate::guard::Guard;
-
-#[cfg(feature = "otlp")]
-type Otlp = oxtel_otlp::OtlpHttpExporter;
-
-/// Stands in for the OTLP exporter when the `otlp` feature is off. Never
-/// constructed.
-#[cfg(not(feature = "otlp"))]
-#[derive(Clone)]
-enum Otlp {}
-
-#[cfg(not(feature = "otlp"))]
-mod no_otlp {
-    use oxtel_sdk::Resource;
-    use oxtel_sdk::export::ExportError;
-    use oxtel_sdk::logs::{LogExporter, LogRecord};
-    use oxtel_sdk::metrics::{MetricExporter, MetricFamily};
-    use oxtel_sdk::trace::{SpanData, SpanExporter};
-
-    impl SpanExporter for super::Otlp {
-        fn export(&self, _: &[SpanData], _: &Resource) -> Result<(), ExportError> {
-            match *self {}
-        }
-    }
-    impl LogExporter for super::Otlp {
-        fn export(&self, _: &[LogRecord], _: &Resource) -> Result<(), ExportError> {
-            match *self {}
-        }
-    }
-    impl MetricExporter for super::Otlp {
-        fn export(&self, _: &[MetricFamily], _: &Resource) -> Result<(), ExportError> {
-            match *self {}
-        }
-    }
-}
+use crate::plan::{Plan, Proc, Programmed, Reader};
 
 type BoxedLayer = Box<dyn Layer<Registry> + Send + Sync>;
 type Hook<B> = Box<dyn FnOnce(B) -> B>;
@@ -250,36 +216,63 @@ impl Builder {
     /// subscriber, the global `metrics` recorder and, with the `log`
     /// feature, the bridge from the `log` crate. Keep the guard alive.
     pub fn install(self) -> Result<Guard, Error> {
-        self.build().install()
+        self.build()?.install()
     }
 
     /// Build the pipelines without installing anything, to install them
     /// yourself or use them in a test.
-    // Without the `otlp` feature, the OTLP arms below can't be reached.
-    #[cfg_attr(not(feature = "otlp"), allow(unreachable_code))]
-    pub fn build(self) -> Telemetry {
-        let mut env = EnvConfig::from_env();
-        if !self.env_exporters {
-            env.traces.clear();
-            env.metrics.clear();
-            env.logs.clear();
-        }
-        let mut warnings = std::mem::take(&mut env.warnings);
+    ///
+    /// With `OTEL_CONFIG_FILE` set (and the `config` feature), the
+    /// pipelines come from that declarative configuration file, and the
+    /// other `OTEL_*` variables are used only where the file substitutes
+    /// them. A file that can't be read is an error.
+    pub fn build(self) -> Result<Telemetry, Error> {
         oxtel_sdk::sdk_metrics::set_enabled(self.sdk_metrics);
-        let resource = self.resource.unwrap_or_else(|| {
-            let mut b = Resource::builder();
-            if let Some(name) = self.default_service_name {
-                b = b.with_default_service_name(name);
+        let programmed = Programmed {
+            default_service_name: self.default_service_name,
+            attributes: self.attributes,
+            detectors: self.detectors,
+            resource: self.resource,
+            sampler: self.sampler,
+        };
+        let config_file = std::env::var("OTEL_CONFIG_FILE")
+            .ok()
+            .filter(|p| !p.trim().is_empty());
+        let plan = match config_file {
+            #[cfg(feature = "config")]
+            Some(path) => {
+                let parsed = oxtel_config::from_file(path.trim())
+                    .map_err(|e| Error::Config(e.to_string()))?;
+                Plan::from_config(parsed, programmed, EnvConfig::local_format_from_env())
             }
-            for kv in self.attributes {
-                b = b.with_attribute(kv);
+            #[cfg(not(feature = "config"))]
+            Some(_) => {
+                let mut plan =
+                    Plan::from_env(EnvConfig::from_env(), self.env_exporters, programmed);
+                plan.warnings.push(
+                    "OTEL_CONFIG_FILE needs oxtel's `config` feature; using the environment".into(),
+                );
+                plan
             }
-            for detector in self.detectors {
-                b = b.with_boxed_detector(detector);
-            }
-            b.build()
-        });
-        let local_format = match env.local_format {
+            None => Plan::from_env(EnvConfig::from_env(), self.env_exporters, programmed),
+        };
+        let Plan {
+            disabled,
+            resource,
+            trace_context,
+            sampler,
+            span_limits,
+            log_limits,
+            span_processors,
+            log_processors,
+            readers,
+            exemplar_filter,
+            cardinality_limit,
+            local_format: env_local_format,
+            mut warnings,
+        } = plan;
+
+        let local_format = match env_local_format {
             Some(choice) => choice,
             None => self.local_format,
         };
@@ -297,7 +290,7 @@ impl Builder {
             self.local_filter.or_else(|| self.logs_filter.clone()),
             &mut warnings,
         );
-        if env.disabled {
+        if disabled {
             let mut layers: Vec<BoxedLayer> = Vec::new();
             layers.extend(local(
                 local_directives.clone(),
@@ -305,7 +298,7 @@ impl Builder {
                 self.local_writer,
             ));
             layers.extend(self.layers);
-            return Telemetry {
+            return Ok(Telemetry {
                 dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),
                 recorder: None,
                 guard: Guard {
@@ -317,34 +310,22 @@ impl Builder {
                 },
                 warnings,
                 trace_context: false,
-            };
+            });
         }
 
-        let wants_otlp = [&env.traces, &env.metrics, &env.logs]
-            .iter()
-            .any(|e| e.contains(&Exporter::Otlp));
-        #[cfg(feature = "otlp")]
-        let otlp: Option<Otlp> =
-            wants_otlp.then(|| oxtel_otlp::OtlpHttpExporter::builder().build());
-        #[cfg(not(feature = "otlp"))]
-        let otlp: Option<Otlp> = {
-            if wants_otlp {
-                warnings.push("OTLP export needs oxtel's `otlp` feature; ignored".into());
-            }
-            None
-        };
-        let console = ConsoleExporter::stdout();
         let traces_directives = directives("traces", self.traces_filter, &mut warnings);
         let logs_directives = directives("logs", self.logs_filter, &mut warnings);
 
-        let logs = (!env.logs.is_empty() || !self.log_hooks.is_empty()).then(|| {
+        let logs = (!log_processors.is_empty() || !self.log_hooks.is_empty()).then(|| {
             let mut b = LoggerProvider::builder().with_resource(resource.clone());
-            for exporter in &env.logs {
-                match (exporter, &otlp) {
-                    (Exporter::Otlp, Some(o)) => b = b.with_batch_exporter(o.clone()),
-                    (Exporter::Console, _) => b = b.with_simple_exporter(console.clone()),
-                    _ => {}
-                }
+            if let Some(limits) = log_limits {
+                b = b.with_limits(limits);
+            }
+            for p in log_processors {
+                b = match p {
+                    Proc::Batch(sink, config) => b.with_batch_exporter_config(sink, config),
+                    Proc::Simple(sink) => b.with_simple_exporter(sink),
+                };
             }
             for hook in self.log_hooks {
                 b = hook(b);
@@ -357,15 +338,17 @@ impl Builder {
         let mut b = TracerProvider::builder()
             .with_resource(resource.clone())
             .with_span_events(logs.is_none());
-        if let Some(sampler) = self.sampler {
+        if let Some(sampler) = sampler {
             b = b.with_sampler(sampler);
         }
-        for exporter in &env.traces {
-            match (exporter, &otlp) {
-                (Exporter::Otlp, Some(o)) => b = b.with_batch_exporter(o.clone()),
-                (Exporter::Console, _) => b = b.with_simple_exporter(console.clone()),
-                _ => {}
-            }
+        if let Some(limits) = span_limits {
+            b = b.with_span_limits(limits);
+        }
+        for p in span_processors {
+            b = match p {
+                Proc::Batch(sink, config) => b.with_batch_exporter_config(sink, config),
+                Proc::Simple(sink) => b.with_simple_exporter(sink),
+            };
         }
         for hook in self.trace_hooks {
             b = hook(b);
@@ -373,30 +356,35 @@ impl Builder {
         let traces = b.build();
 
         let mut prometheus = None;
-        let metrics = (!env.metrics.is_empty()
-            || !self.metric_hooks.is_empty()
-            || self.pull_metrics)
+        let metrics = (!readers.is_empty() || !self.metric_hooks.is_empty() || self.pull_metrics)
             .then(|| {
                 let mut b = MeterProvider::builder().with_resource(resource.clone());
-                for exporter in &env.metrics {
-                    match (exporter, &otlp) {
-                        (Exporter::Otlp, Some(o)) => b = b.with_periodic_exporter(o.clone()),
-                        (Exporter::Console, _) => b = b.with_periodic_exporter(console.clone()),
-                        _ => {}
+                if let Some(filter) = exemplar_filter {
+                    b = b.with_exemplar_filter(filter);
+                }
+                if let Some(limit) = cardinality_limit {
+                    b = b.with_cardinality_limit(limit);
+                }
+                let mut pull = Vec::new();
+                for reader in readers {
+                    match reader {
+                        Reader::Periodic(sink, config) => {
+                            b = b.with_periodic_exporter_config(sink, config);
+                        }
+                        Reader::Prometheus { addr, options } => pull.push((addr, options)),
                     }
                 }
                 for hook in self.metric_hooks {
                     b = hook(b);
                 }
                 let meters = b.build();
-                if env.metrics.contains(&Exporter::Prometheus) {
-                    let exporter = PrometheusExporter::new(meters.clone(), resource.clone());
-                    match PrometheusServer::serve(env.prometheus_addr.as_str(), exporter) {
+                if let Some((addr, options)) = pull.into_iter().next() {
+                    let exporter = PrometheusExporter::new(meters.clone(), resource.clone())
+                        .with_options(options);
+                    match PrometheusServer::serve(addr.as_str(), exporter) {
                         Ok(server) => prometheus = Some(server),
-                        Err(e) => warnings.push(format!(
-                            "couldn't serve Prometheus metrics on {}: {e}",
-                            env.prometheus_addr
-                        )),
+                        Err(e) => warnings
+                            .push(format!("couldn't serve Prometheus metrics on {addr}: {e}")),
                     }
                 }
                 meters
@@ -424,7 +412,7 @@ impl Builder {
             self.local_writer,
         ));
         layers.extend(self.layers);
-        Telemetry {
+        Ok(Telemetry {
             dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),
             recorder: metrics.as_ref().map(MeterProvider::recorder),
             guard: Guard {
@@ -435,8 +423,8 @@ impl Builder {
                 timeout: self.shutdown_timeout,
             },
             warnings,
-            trace_context: env.trace_context,
-        }
+            trace_context,
+        })
     }
 }
 
@@ -528,22 +516,29 @@ impl Telemetry {
     }
 }
 
-/// Why oxtel couldn't be installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Why oxtel couldn't be set up.
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Error {
     /// A global `tracing` subscriber was already installed.
     SubscriberAlreadySet,
     /// A global `metrics` recorder was already installed.
     RecorderAlreadySet,
+    /// The configuration file `OTEL_CONFIG_FILE` names couldn't be read.
+    Config(String),
 }
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Error::SubscriberAlreadySet => "a global tracing subscriber is already installed",
-            Error::RecorderAlreadySet => "a global metrics recorder is already installed",
-        })
+        match self {
+            Error::SubscriberAlreadySet => {
+                f.write_str("a global tracing subscriber is already installed")
+            }
+            Error::RecorderAlreadySet => {
+                f.write_str("a global metrics recorder is already installed")
+            }
+            Error::Config(e) => f.write_str(e),
+        }
     }
 }
 

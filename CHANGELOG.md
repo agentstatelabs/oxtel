@@ -17,6 +17,12 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **Declarative configuration** (`oxtel-config`, and the facade's `config` feature, on by default). When `OTEL_CONFIG_FILE` names a file, oxtel builds every pipeline from it, and other `OTEL_*` variables count only where the file substitutes them.
+  - Schema 1.x: `disabled`; `resource` (typed attributes, `attributes_list`, `schema_url`, `detection/development` detectors); `attribute_limits`; `propagator`; and per signal, limits, samplers (`always_on`, `always_off`, `trace_id_ratio_based`, `parent_based`), `batch` and `simple` processors, OTLP/HTTP and console exporters, periodic readers, the `prometheus/development` pull exporter, `exemplar_filter` and cardinality limits.
+  - Environment substitution follows the spec: `${NAME}`, `${env:NAME}`, `${NAME:-default}` and `$$`, in values only. Unquoted values are typed by the YAML 1.2 core schema after substitution; quoted ones stay strings. A substituted value is never read as YAML structure.
+  - Unknown keys and unsupported parts (views, gRPC, TLS files, delta temporality, non-default parent-based children) are reported as warnings, logged with the target `oxtel`. Wrong types, a missing or 2.x `file_format`, and malformed YAML are errors that name the field or line. `init()` returns `Error::Config` rather than starting misconfigured.
+  - The configuration project's v1.2.0 examples are vendored and parsed in tests. CI checks `examples/otel-config.yaml` and those examples against the published schema. A fuzz target covers the parser.
+  - `Error` is no longer `Copy`, and `Builder::build` returns a `Result`.
 - **OTLP/JSON** (`http/json`) for every signal, chosen by `OTEL_EXPORTER_OTLP_[SIGNAL_]PROTOCOL` or `with_protocol`. It follows the OTLP specification's JSON rules:
   - lowerCamelCase field names;
   - trace and span ids in hex, not base64;

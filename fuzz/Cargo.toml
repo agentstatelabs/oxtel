@@ -12,6 +12,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 oxtel-sdk = { path = "../crates/oxtel-sdk" }
 oxtel-otlp = { path = "../crates/oxtel-otlp" }
+oxtel-config = { path = "../crates/oxtel-config" }
 
 # Its own workspace, so the fuzz build (nightly, sanitizers) never touches
 # the main one.
@@ -49,6 +50,13 @@ bench = false
 [[bin]]
 name = "config_lists"
 path = "fuzz_targets/config_lists.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "config_file"
+path = "fuzz_targets/config_file.rs"
 test = false
 doc = false
 bench = false

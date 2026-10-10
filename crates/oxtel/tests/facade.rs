@@ -52,7 +52,8 @@ fn all_signals(builder: oxtel::Builder) -> (Telemetry, Exporters) {
         .with_traces(move |b| b.with_simple_exporter(spans))
         .with_logs(move |b| b.with_simple_exporter(logs))
         .with_metrics(move |b| b.with_periodic_exporter_config(metrics, HOURLY))
-        .build();
+        .build()
+        .unwrap();
     (telemetry, e)
 }
 
@@ -121,7 +122,8 @@ fn without_a_log_pipeline_events_stay_span_events() {
     let exporter = spans.clone();
     let telemetry = builder()
         .with_traces(move |b| b.with_simple_exporter(exporter))
-        .build();
+        .build()
+        .unwrap();
     assert!(telemetry.guard().logger_provider().is_none());
     assert!(telemetry.recorder().is_none(), "no metrics pipeline either");
     run(&telemetry, || {
@@ -159,7 +161,10 @@ fn layers_of_your_own_see_everything() {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
-    let telemetry = builder().with_layer(Count(Arc::clone(&seen))).build();
+    let telemetry = builder()
+        .with_layer(Count(Arc::clone(&seen)))
+        .build()
+        .unwrap();
     run(&telemetry, || {
         tracing::trace!("fine detail");
         tracing::info!("routine");
@@ -173,7 +178,8 @@ fn propagation_continues_and_passes_on_the_trace() {
     let exporter = spans.clone();
     let telemetry = builder()
         .with_traces(move |b| b.with_simple_exporter(exporter))
-        .build();
+        .build()
+        .unwrap();
     let mut incoming = HashMap::new();
     incoming.insert(
         "traceparent".to_string(),
@@ -240,7 +246,8 @@ fn slow_pipelines(delay: Duration, timeout: Duration) -> Telemetry {
         .with_logs(move |b| b.with_batch_exporter_config(logs, lb))
         .with_metrics(move |b| b.with_periodic_exporter_config(metrics, HOURLY))
         .with_shutdown_timeout(timeout)
-        .build();
+        .build()
+        .unwrap();
     run(&telemetry, || {
         tracing::info_span!("work").in_scope(|| tracing::info!("done"));
         metrics::counter!("jobs").increment(1);
