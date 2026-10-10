@@ -1,0 +1,23 @@
+[package]
+name = "oxtel-semconv"
+description = "The OpenTelemetry semantic conventions as Rust constants, generated with OpenTelemetry Weaver from pinned releases"
+readme = "../../README.md"
+keywords = ["opentelemetry", "semantic-conventions", "semconv", "telemetry"]
+categories = ["development-tools::debugging", "development-tools::profiling"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+include = ["src/**", "Cargo.toml"]
+
+[features]
+default = []
+# Conventions whose stability is development: they may change or vanish in
+# any release of the conventions.
+experimental = []
+
+[lints]
+workspace = true

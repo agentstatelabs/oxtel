@@ -29,6 +29,7 @@ tower-service = "0.3"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
+oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
 axum = { version = "0.8", default-features = false, features = ["matched-path", "tokio", "http1"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }

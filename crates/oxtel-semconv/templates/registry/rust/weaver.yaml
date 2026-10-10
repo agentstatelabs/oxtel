@@ -1,0 +1,36 @@
+# Weaver configuration for oxtel-semconv. `cargo run -p xtask -- gen-semconv`
+# runs Weaver with these templates over the pinned registries.
+
+text_maps:
+  instruments:
+    counter: Counter
+    updowncounter: UpDownCounter
+    gauge: Gauge
+    histogram: Histogram
+
+comment_formats:
+  rustdoc:
+    format: markdown
+    prefix: "/// "
+    trim: true
+    escape_square_brackets: true
+    # Unlabelled code blocks in the conventions aren't Rust; don't let
+    # rustdoc compile them as doctests.
+    default_block_code_language: text
+    word_wrap:
+      line_length: 96
+default_comment_format: rustdoc
+
+whitespace_control:
+  trim_blocks: true
+  lstrip_blocks: true
+
+templates:
+  - template: "attribute.rs.j2"
+    filter: >
+      semconv_grouped_attributes({"exclude_deprecated": true})
+    application_mode: single
+  - template: "metric.rs.j2"
+    filter: >
+      semconv_grouped_metrics({"exclude_deprecated": true})
+    application_mode: single

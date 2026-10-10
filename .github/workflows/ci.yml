@@ -28,6 +28,7 @@ jobs:
       - run: cargo test -p oxtel-tower --features axum
       - run: cargo clippy -p oxtel-rmcp --all-targets --features client
       - run: cargo test -p oxtel-rmcp --features client
+      - run: cargo clippy -p oxtel-semconv --all-targets --features experimental
       - run: cargo doc --workspace --no-deps
 
   msrv:
@@ -102,6 +103,32 @@ jobs:
       - name: Collector logs
         if: always()
         run: docker logs otelcol 2>&1 | tail -100
+
+  # oxtel-semconv is generated: regenerating it with the pinned Weaver and
+  # conventions must change nothing.
+  semconv:
+    runs-on: ubuntu-latest
+    env:
+      WEAVER_VERSION: "v0.26.1"
+      WEAVER_SHA256: "1be79cca68925c09b6da04ef8a3875b563cf7c1dcd51cc5b7eff7d2edbb1a5dc"
+    steps:
+      - uses: actions/checkout@v7
+      # The toolchain whose rustfmt formatted the committed code.
+      - uses: dtolnay/rust-toolchain@1.94
+        with:
+          components: rustfmt
+      - name: Install Weaver
+        shell: bash
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/weaver.tar.xz" \
+            "https://github.com/open-telemetry/weaver/releases/download/${WEAVER_VERSION}/weaver-x86_64-unknown-linux-gnu.tar.xz"
+          echo "${WEAVER_SHA256}  $RUNNER_TEMP/weaver.tar.xz" | sha256sum -c -
+          tar -xf "$RUNNER_TEMP/weaver.tar.xz" -C "$RUNNER_TEMP"
+          echo "WEAVER=$RUNNER_TEMP/weaver-x86_64-unknown-linux-gnu/weaver" >> "$GITHUB_ENV"
+      - name: Regenerate
+        run: cargo run -p xtask -- gen-semconv
+      - name: The committed code is current
+        run: git diff --exit-code crates/oxtel-semconv
 
   # Declarative configuration files, checked against the schema the
   # OpenTelemetry configuration project publishes.
