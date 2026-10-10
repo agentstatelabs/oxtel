@@ -6,17 +6,29 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
-### Changed
-- **Log records keep up to four attributes inline** (`oxtel_sdk::Attributes`, which reads like a slice). A log event now makes no heap allocation beyond copying its message and string values, the same as the official stack. That put a bare event at parity with it (it was 17% slower), and an event inside a span at 1.6× faster. The benchmark is in `bench/RESULTS.md`, with a test that holds the allocation count.
-- Tracer and logger provider builders now add exporters and processors rather than replacing them: each span or record goes to all of them.
-- The quick start uses `oxtel::init()`. The hand-assembled pipeline moved to `examples/manual.rs`.
-- **One OTLP exporter serves every signal.** `OtlpHttpExporter` is cheap to clone, and clones share one connection pool. Each signal resolves its own endpoint, headers, compression and timeout from the specification's `OTEL_EXPORTER_OTLP_*` and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_*` variables. `with_endpoint(base)` sends every signal to `{base}/v1/{signal}`, and `with_url(signal, url)` sets one signal's URL exactly; these replace `with_url(url)`. `rejected(signal)` replaces `rejected_spans()`.
-- Each OTLP request's timeout is now the time left in the export, so retries can't overrun the export timeout.
-- `ExportError`, `ProcessorStats` and `BatchConfig` live in `oxtel_sdk::export`, shared by every signal. `oxtel_sdk::trace` still re-exports them.
+## [0.1.0] - 2026-10-10
 
-### Fixed
-- **`oxtel-tower` reported the HTTP `QUERY` method as `_OTHER`.** The conventions list it as a known method since v1.44; the generated constants showed the gap.
-- **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
+The first release. oxtel turns what Rust code already records with `tracing` and `metrics` into standard OpenTelemetry output: traces, metrics and logs over OTLP/HTTP, Prometheus and OpenMetrics scrapes, and local text or JSON logs. One call, `oxtel::init()`, sets it up from the standard `OTEL_*` variables or a declarative configuration file. Ready-made instrumentation covers HTTP (tower, axum, hyper) and MCP (rmcp).
+
+What the release claims is checked in CI:
+- output against a real OpenTelemetry Collector, in protobuf and JSON;
+- Prometheus output against Prometheus's own tools;
+- configuration files against the published schema;
+- names against the semantic conventions, generated with OpenTelemetry Weaver;
+- every parser of outside input, with property tests and fuzzing.
+
+Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.md`. The API will change before 1.0. The MSRV is Rust 1.94.
+
+| Crate | What it is |
+|---|---|
+| `oxtel` | One-call setup from the environment or a configuration file |
+| `oxtel-sdk` | The data model, `tracing` layers, `metrics` recorder, processors, samplers, resources |
+| `oxtel-otlp` | OTLP/HTTP export, protobuf or JSON |
+| `oxtel-prometheus` | Prometheus and OpenMetrics exposition, and a `/metrics` endpoint |
+| `oxtel-config` | Declarative configuration (`OTEL_CONFIG_FILE`) |
+| `oxtel-semconv` | The semantic conventions as constants |
+| `oxtel-tower` | HTTP server and client instrumentation |
+| `oxtel-rmcp` | MCP server and client instrumentation |
 
 ### Added
 - **`oxtel-semconv`: the semantic conventions as Rust constants**, generated with OpenTelemetry Weaver 0.26.1 from semantic-conventions v1.44.0 and, for `genai`, the GenAI and MCP conventions at a pinned commit of semantic-conventions-genai.
@@ -31,7 +43,6 @@ All notable changes to oxtel are recorded here. The format follows
   - Environment substitution follows the spec: `${NAME}`, `${env:NAME}`, `${NAME:-default}` and `$$`, in values only. Unquoted values are typed by the YAML 1.2 core schema after substitution; quoted ones stay strings. A substituted value is never read as YAML structure.
   - Unknown keys and unsupported parts (views, gRPC, TLS files, delta temporality, non-default parent-based children) are reported as warnings, logged with the target `oxtel`. Wrong types, a missing or 2.x `file_format`, and malformed YAML are errors that name the field or line. `init()` returns `Error::Config` rather than starting misconfigured.
   - The configuration project's v1.2.0 examples are vendored and parsed in tests. CI checks `examples/otel-config.yaml` and those examples against the published schema. A fuzz target covers the parser.
-  - `Error` is no longer `Copy`, and `Builder::build` returns a `Result`.
 - **OTLP/JSON** (`http/json`) for every signal, chosen by `OTEL_EXPORTER_OTLP_[SIGNAL_]PROTOCOL` or `with_protocol`. It follows the OTLP specification's JSON rules:
   - lowerCamelCase field names;
   - trace and span ids in hex, not base64;
@@ -92,6 +103,7 @@ All notable changes to oxtel are recorded here. The format follows
   - Batch, simple and no-op processors. The batch processor shares the span processor's worker, configured from `OTEL_BLRP_*`.
   - **Events inside spans:** a tracer provider's `with_span_events(false)` sends events out as log records only, as OpenTelemetry now recommends.
 - **`oxtel-otlp`: logs over OTLP/HTTP**, checked against a real Collector in CI.
+- **Log records keep up to four attributes inline**, so a log event makes no heap allocation beyond copying its message and string values. That's the same as the official stack: a bare event costs the same, and an event inside a span is 1.6× faster (`bench/RESULTS.md`).
 - **`oxtel-sdk`: traces from `tracing` spans.**
   - `TraceLayer`, a `tracing-subscriber` layer. Span fields become attributes. `otel.name`, `otel.kind`, `otel.status_code` and `otel.status_description` set the name, kind and status. Events inside a span become span events, and `follows_from` becomes a link.
   - A sampler decides when a span starts. Unsampled spans keep their ids, so logs and outgoing requests can still carry them.
@@ -116,14 +128,10 @@ All notable changes to oxtel are recorded here. The format follows
   - A counter's value has its own cache line, and recording skips the exemplar check entirely when exemplars are off. Benchmarking showed cached-handle increments 22% faster and contended ones 24% faster as a result.
   - **Exemplars:** one per histogram bucket, and the latest per counter, linking a measurement to the trace it was made in. `OTEL_METRICS_EXEMPLAR_FILTER` chooses `trace_based` (the default: sampled spans only), `always_on` or `always_off`. Exemplars are skipped, not waited for, under contention.
   - `current_span_context()` is now cheap enough for hot paths, and finds the nearest recorded span when the current one is filtered out of traces.
-- **Ready to be public:**
-  - a README that shows what works, a quick start (`examples/quickstart.rs`, compiled in CI) and the benchmark summary;
-  - the Code of Conduct (Contributor Covenant 2.1, adopted by reference);
-  - issue and pull request templates, and a DCO sign-off check on pull requests;
-  - Dependabot, and CODEOWNERS.
 - **Fuzzing and property tests for every parser of outside input:** `traceparent`, `tracestate`, `baggage`, extraction from carriers, `OTEL_RESOURCE_ATTRIBUTES` and `OTEL_EXPORTER_OTLP_HEADERS`.
   - Property tests (proptest, in `cargo test`) check that no input panics; that valid headers parse and round-trip; that versions above `00` read as `00` and `ff` is rejected; that uppercase and all-zero ids are rejected; that the 32-member and 180-entry limits hold; and that baggage values survive percent-encoding.
   - Coverage-guided fuzz targets (`fuzz/`, cargo-fuzz) check the same invariants, 60 s per target in CI.
+  - They found one bug before this release: a `traceparent` with multi-byte characters made the parser panic, because it sliced the header at byte offsets. It now rejects non-ASCII input first, as the spec requires.
 - **Conformance against a real OpenTelemetry Collector** (`conformance/`, run in CI). Spans exported over OTLP/HTTP, plain and gzipped, are checked as the Collector decodes them: ids, parents, remote-parent flags, kinds, typed attributes, status, events and links. `/metrics` is checked as the Collector's Prometheus receiver scrapes it: names, types, labels, values, and exemplars carrying the trace id.
 - **Benchmarks** (`bench/`, not published) against `tracing-opentelemetry` with `opentelemetry_sdk` 0.33, and against `metrics-exporter-prometheus`. The setups are matched, and end-to-end runs use isolated processes. Results and method are in `bench/RESULTS.md`.
   - Traces: 1.5–7× less overhead per operation.
@@ -137,9 +145,13 @@ All notable changes to oxtel are recorded here. The format follows
     - sanitised names; label keys that collide have their values joined with `;`.
   - The resource becomes `target_info`, and series carry `otel_scope_name`; both can be turned off.
   - CI checks the output with `promtool check metrics` and with prometheus-client's strict OpenMetrics parser.
+- **`oxtel-otlp`: one exporter for every signal.** `OtlpHttpExporter` is cheap to clone, and clones share one connection pool. Each signal takes its own endpoint, headers, compression, timeout and encoding from `OTEL_EXPORTER_OTLP_*` and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_*`. Each request's timeout is the time left in the export, so retries never overrun it.
 - **`oxtel-otlp`: OTLP over HTTP with protobuf.**
   - Types generated from the official OTLP definitions, v1.11.1, with no `protoc` needed.
   - Endpoint, headers, compression and timeout from the `OTEL_EXPORTER_OTLP_*` variables.
   - gzip.
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
+
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/agentstatelabs/oxtel/releases/tag/v0.1.0

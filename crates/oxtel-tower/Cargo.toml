@@ -18,8 +18,8 @@ default = []
 axum = ["dep:axum"]
 
 [dependencies]
-oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1", features = ["http"] }
-oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.0.1" }
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.1.0", features = ["http"] }
+oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.1.0" }
 axum = { version = "0.8", default-features = false, features = ["matched-path"], optional = true }
 http = "1.4"
 metrics = "0.24"
@@ -34,6 +34,10 @@ axum = { version = "0.8", default-features = false, features = ["matched-path", 
 tokio = { version = "1", features = ["macros", "rt"] }
 tower = { version = "0.5", default-features = false, features = ["util"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[package.metadata.docs.rs]
+# Document the APIs behind features too.
+all-features = true
 
 [lints]
 workspace = true

@@ -1,6 +1,6 @@
 [package]
 name = "oxtel-otlp"
-description = "OTLP exporters for oxtel: HTTP/protobuf, HTTP/JSON and gRPC"
+description = "OTLP/HTTP export for oxtel, with protobuf or JSON bodies"
 readme = "../../README.md"
 keywords = ["opentelemetry", "otlp", "tracing", "exporter", "telemetry"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
@@ -11,7 +11,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-include = ["src/**", "proto/**", "Cargo.toml"]
+include = ["src/**", "proto/**", "Cargo.toml", "LICENSE"]
 
 [features]
 default = ["http-proto"]
@@ -19,7 +19,7 @@ default = ["http-proto"]
 http-proto = ["dep:ureq", "dep:flate2"]
 
 [dependencies]
-oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1" }
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.1.0" }
 prost = "0.14"
 fastrand = "2.4"
 flate2 = { version = "1.1", optional = true }
