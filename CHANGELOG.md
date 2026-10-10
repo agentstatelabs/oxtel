@@ -7,6 +7,7 @@ All notable changes to oxtel are recorded here. The format follows
 ## [Unreleased]
 
 ### Changed
+- **Log records keep up to four attributes inline** (`oxtel_sdk::Attributes`, which reads like a slice). A log event now makes no heap allocation beyond copying its message and string values, the same as the official stack. That put a bare event at parity with it (it was 17% slower), and an event inside a span at 1.6× faster. The benchmark is in `bench/RESULTS.md`, with a test that holds the allocation count.
 - Tracer and logger provider builders now add exporters and processors rather than replacing them: each span or record goes to all of them.
 - The quick start uses `oxtel::init()`. The hand-assembled pipeline moved to `examples/manual.rs`.
 - **One OTLP exporter serves every signal.** `OtlpHttpExporter` is cheap to clone, and clones share one connection pool. Each signal resolves its own endpoint, headers, compression and timeout from the specification's `OTEL_EXPORTER_OTLP_*` and `OTEL_EXPORTER_OTLP_{TRACES,METRICS,LOGS}_*` variables. `with_endpoint(base)` sends every signal to `{base}/v1/{signal}`, and `with_url(signal, url)` sets one signal's URL exactly; these replace `with_url(url)`. `rejected(signal)` replaces `rejected_spans()`.

@@ -1158,6 +1158,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "opentelemetry-appender-tracing"
+version = "0.33.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e2b304e8d8f11326ba366a99ca5c7aaf7cd397b67268a332437175aeb42a40db"
+dependencies = [
+ "opentelemetry",
+ "tracing",
+ "tracing-core",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "opentelemetry-http"
 version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1238,6 +1250,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "opentelemetry",
+ "opentelemetry-appender-tracing",
  "opentelemetry-otlp",
  "opentelemetry_sdk",
  "oxtel-otlp",
@@ -1332,6 +1345,7 @@ dependencies = [
  "metrics",
  "proptest",
  "serde_json",
+ "smallvec",
  "tracing",
  "tracing-core",
  "tracing-log",

@@ -16,7 +16,7 @@ use crate::logs::data::{LogRecord, Severity};
 use crate::logs::processor::LogProcessor;
 use crate::trace::Scope;
 use crate::trace::layer::SpanState;
-use crate::value::{KeyValue, Value, int_value};
+use crate::value::{Attributes, KeyValue, Value, int_value};
 
 /// How many attributes a log record keeps. More are dropped and counted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -88,7 +88,7 @@ impl LogLayer {
 /// Records an event's fields into a log record's body and attributes.
 struct LogFields {
     body: Option<Value>,
-    attributes: Vec<KeyValue>,
+    attributes: Attributes,
     dropped: u32,
     limit: usize,
     /// The original target of an event forwarded from the `log` crate.
@@ -98,7 +98,14 @@ struct LogFields {
 
 impl LogFields {
     fn field(&mut self, field: &Field, value: Value) {
-        match field.name() {
+        let name = field.name();
+        // Only `message` and the `log.*` fields are special; most names
+        // aren't, and the first byte says so.
+        if !matches!(name.as_bytes().first(), Some(b'm' | b'l')) {
+            self.attribute(name, value);
+            return;
+        }
+        match name {
             "message" => self.body = Some(value),
             // Fields `tracing-log` adds to events from the `log` crate.
             "log.target" => {
@@ -188,7 +195,7 @@ where
         let meta = event.metadata();
         let mut fields = LogFields {
             body: None,
-            attributes: Vec::new(),
+            attributes: Attributes::new(),
             dropped: 0,
             limit: self.shared.limits.max_attributes,
             log_target: None,

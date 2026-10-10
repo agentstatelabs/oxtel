@@ -21,6 +21,7 @@ http = ["dep:http"]
 fastrand = "2.4"
 metrics = "0.24"
 http = { version = "1.4", optional = true }
+smallvec = { version = "1.16", features = ["const_generics"] }
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }

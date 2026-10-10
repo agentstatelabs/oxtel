@@ -114,3 +114,62 @@ pub(crate) fn int_value(fits: Option<i64>, value: impl ToString) -> Value {
         None => Value::String(value.to_string()),
     }
 }
+
+/// A record's attributes. Up to four are kept inline, with no heap
+/// allocation, which covers most log records; more spill to the heap. Reads
+/// like a slice of [`KeyValue`].
+#[derive(Clone, Default, PartialEq)]
+pub struct Attributes(smallvec::SmallVec<[KeyValue; 4]>);
+
+impl Attributes {
+    /// No attributes.
+    pub fn new() -> Self {
+        Attributes::default()
+    }
+
+    /// Add `kv` at the end.
+    pub fn push(&mut self, kv: KeyValue) {
+        self.0.push(kv);
+    }
+}
+
+impl std::ops::Deref for Attributes {
+    type Target = [KeyValue];
+
+    fn deref(&self) -> &[KeyValue] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for Attributes {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list().entries(self.0.iter()).finish()
+    }
+}
+
+impl From<Vec<KeyValue>> for Attributes {
+    fn from(v: Vec<KeyValue>) -> Self {
+        Attributes(smallvec::SmallVec::from_vec(v))
+    }
+}
+
+impl FromIterator<KeyValue> for Attributes {
+    fn from_iter<I: IntoIterator<Item = KeyValue>>(iter: I) -> Self {
+        Attributes(iter.into_iter().collect())
+    }
+}
+
+impl<'a> IntoIterator for &'a Attributes {
+    type Item = &'a KeyValue;
+    type IntoIter = std::slice::Iter<'a, KeyValue>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter()
+    }
+}
+
+impl PartialEq<Vec<KeyValue>> for Attributes {
+    fn eq(&self, other: &Vec<KeyValue>) -> bool {
+        self.0.as_slice() == other.as_slice()
+    }
+}
