@@ -2,11 +2,12 @@
 //! choices.
 
 use std::fmt;
+use std::io::Write;
 use std::time::Duration;
 
 use oxtel_prometheus::{PrometheusExporter, PrometheusServer};
 use oxtel_sdk::console::ConsoleExporter;
-use oxtel_sdk::logs::{LoggerProvider, LoggerProviderBuilder};
+use oxtel_sdk::logs::{LocalFormat, LocalLayer, LoggerProvider, LoggerProviderBuilder};
 use oxtel_sdk::metrics::{MeterProvider, MeterProviderBuilder, MetricsRecorder};
 use oxtel_sdk::trace::{Sampler, TracerProvider, TracerProviderBuilder};
 use oxtel_sdk::{KeyValue, Resource};
@@ -77,6 +78,9 @@ pub struct Builder {
     pull_metrics: bool,
     sdk_metrics: bool,
     shutdown_timeout: Duration,
+    local_format: Option<LocalFormat>,
+    local_filter: Option<String>,
+    local_writer: Option<Box<dyn Write + Send>>,
 }
 
 impl Default for Builder {
@@ -96,6 +100,9 @@ impl Default for Builder {
             pull_metrics: false,
             sdk_metrics: false,
             shutdown_timeout: Duration::from_secs(5),
+            local_format: None,
+            local_filter: None,
+            local_writer: None,
         }
     }
 }
@@ -200,6 +207,27 @@ impl Builder {
         self
     }
 
+    /// Also write each event locally, to standard error, in `format`: text
+    /// for people, or flat or ECS JSON for log shippers. `OXTEL_LOG_FORMAT`
+    /// (`text`, `json`, `ecs` or `none`) overrides it. Local output keeps
+    /// working when `OTEL_SDK_DISABLED` turns the rest off.
+    pub fn with_local_logs(mut self, format: LocalFormat) -> Self {
+        self.local_format = Some(format);
+        self
+    }
+
+    /// Which events to write locally. Default: the log filter.
+    pub fn with_local_logs_filter(mut self, directives: impl Into<String>) -> Self {
+        self.local_filter = Some(directives.into());
+        self
+    }
+
+    /// Write local output to `out` instead of standard error.
+    pub fn with_local_logs_writer(mut self, out: impl Write + Send + 'static) -> Self {
+        self.local_writer = Some(Box::new(out));
+        self
+    }
+
     /// How long dropping the guard waits for the pipelines to finish
     /// exporting. Default: 5 s.
     pub fn with_shutdown_timeout(mut self, timeout: Duration) -> Self {
@@ -227,9 +255,44 @@ impl Builder {
         }
         let mut warnings = std::mem::take(&mut env.warnings);
         oxtel_sdk::sdk_metrics::set_enabled(self.sdk_metrics);
+        let resource = self.resource.unwrap_or_else(|| {
+            let mut b = Resource::builder();
+            if let Some(name) = self.default_service_name {
+                b = b.with_default_service_name(name);
+            }
+            for kv in self.attributes {
+                b = b.with_attribute(kv);
+            }
+            b.build()
+        });
+        let local_format = match env.local_format {
+            Some(choice) => choice,
+            None => self.local_format,
+        };
+        let local = |events: Targets, spans: Targets, writer: Option<Box<dyn Write + Send>>| {
+            local_format.map(|format| {
+                let mut layer = LocalLayer::new(format).with_resource(&resource);
+                if let Some(out) = writer {
+                    layer = layer.with_writer(out);
+                }
+                layer.with_filter(LogFilter { events, spans }).boxed()
+            })
+        };
+        let local_directives = directives(
+            "local logs",
+            self.local_filter.or_else(|| self.logs_filter.clone()),
+            &mut warnings,
+        );
         if env.disabled {
+            let mut layers: Vec<BoxedLayer> = Vec::new();
+            layers.extend(local(
+                local_directives.clone(),
+                local_directives,
+                self.local_writer,
+            ));
+            layers.extend(self.layers);
             return Telemetry {
-                dispatch: Dispatch::new(tracing_subscriber::registry().with(self.layers)),
+                dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),
                 recorder: None,
                 guard: Guard {
                     traces: None,
@@ -243,16 +306,6 @@ impl Builder {
             };
         }
 
-        let resource = self.resource.unwrap_or_else(|| {
-            let mut b = Resource::builder();
-            if let Some(name) = self.default_service_name {
-                b = b.with_default_service_name(name);
-            }
-            for kv in self.attributes {
-                b = b.with_attribute(kv);
-            }
-            b.build()
-        });
         let wants_otlp = [&env.traces, &env.metrics, &env.logs]
             .iter()
             .any(|e| e.contains(&Exporter::Otlp));
@@ -346,11 +399,16 @@ impl Builder {
                 logs.layer()
                     .with_filter(LogFilter {
                         events: logs_directives,
-                        spans: traces_directives,
+                        spans: traces_directives.clone(),
                     })
                     .boxed(),
             );
         }
+        layers.extend(local(
+            local_directives,
+            traces_directives,
+            self.local_writer,
+        ));
         layers.extend(self.layers);
         Telemetry {
             dispatch: Dispatch::new(tracing_subscriber::registry().with(layers)),

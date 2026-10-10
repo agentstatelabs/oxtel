@@ -84,7 +84,7 @@ pub fn rfc3339(t: SystemTime) -> String {
 
 /// A value as it appears after `key=`: quoted when it would otherwise be
 /// ambiguous.
-fn value(out: &mut String, v: &Value) {
+pub(crate) fn text_value(out: &mut String, v: &Value) {
     match v {
         Value::String(s)
             if s.is_empty() || s.contains(|c: char| c.is_whitespace() || c == '=' || c == '"') =>
@@ -110,7 +110,7 @@ fn value(out: &mut String, v: &Value) {
                 if i > 0 {
                     out.push(',');
                 }
-                value(out, item);
+                text_value(out, item);
             }
             out.push(']');
         }
@@ -121,7 +121,7 @@ fn value(out: &mut String, v: &Value) {
                     out.push(',');
                 }
                 let _ = write!(out, "{}=", kv.key);
-                value(out, &kv.value);
+                text_value(out, &kv.value);
             }
             out.push('}');
         }
@@ -131,7 +131,7 @@ fn value(out: &mut String, v: &Value) {
 fn attributes(out: &mut String, kvs: &[KeyValue]) {
     for kv in kvs {
         let _ = write!(out, " {}=", kv.key);
-        value(out, &kv.value);
+        text_value(out, &kv.value);
     }
 }
 
@@ -201,7 +201,7 @@ impl LogExporter for ConsoleExporter {
                 text.push(' ');
                 match body {
                     Value::String(s) => text.push_str(s),
-                    other => value(&mut text, other),
+                    other => text_value(&mut text, other),
                 }
             }
             attributes(&mut text, &record.attributes);
@@ -227,7 +227,7 @@ impl MetricExporter for ConsoleExporter {
                             text.push(',');
                         }
                         let _ = write!(text, "{k}=");
-                        value(&mut text, &Value::String(v.clone()));
+                        text_value(&mut text, &Value::String(v.clone()));
                     }
                     text.push('}');
                 }

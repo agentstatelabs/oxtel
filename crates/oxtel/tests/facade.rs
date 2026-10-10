@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use oxtel::Telemetry;
 use oxtel::sdk::export::{BatchConfig, ExportError};
-use oxtel::sdk::logs::{InMemoryLogExporter, LogExporter, LogRecord};
+use oxtel::sdk::logs::{InMemoryLogExporter, LocalFormat, LogExporter, LogRecord};
 use oxtel::sdk::metrics::{
     InMemoryMetricExporter, MetricExporter, MetricFamily, PeriodicReaderConfig, PointValue,
 };
@@ -271,4 +271,70 @@ fn shutdown_waits_no_longer_than_its_timeout() {
         "{:?}",
         started.elapsed()
     );
+}
+
+/// A writer the test can read back.
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Captured {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
+}
+
+#[test]
+fn local_lines_carry_the_same_ids_as_exported_records() {
+    let out = Captured::default();
+    let (telemetry, e) = all_signals(
+        builder()
+            .with_local_logs(LocalFormat::Json)
+            .with_local_logs_writer(out.clone()),
+    );
+    let request = run(&telemetry, || {
+        let span = tracing::info_span!("request", http.route = "/items");
+        span.in_scope(|| tracing::warn!(key = "items", "slow"));
+        span_context(&span).unwrap()
+    });
+    let text = out.text();
+    assert!(text.contains(r#""message":"slow""#), "{text}");
+    assert!(text.contains(r#""http.route":"/items""#), "{text}");
+    assert!(
+        text.contains(&format!(r#""span_id":"{}""#, request.span_id)),
+        "{text}"
+    );
+    assert_eq!(e.logs.records()[0].span_id, Some(request.span_id));
+}
+
+#[test]
+fn local_lines_have_their_own_filter() {
+    let out = Captured::default();
+    let (telemetry, e) = all_signals(
+        builder()
+            .with_logs_filter("warn")
+            .with_local_logs(LocalFormat::Text)
+            .with_local_logs_filter("debug")
+            .with_local_logs_writer(out.clone()),
+    );
+    run(&telemetry, || {
+        tracing::debug!("detail");
+        tracing::trace!("too fine");
+        tracing::warn!("trouble");
+    });
+    let text = out.text();
+    assert!(
+        text.contains("detail") && text.contains("trouble") && !text.contains("too fine"),
+        "{text}"
+    );
+    assert_eq!(bodies(&e.logs.records()), ["trouble"]);
 }

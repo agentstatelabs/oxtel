@@ -1,5 +1,7 @@
 //! What the standard environment variables ask for.
 
+use oxtel_sdk::logs::LocalFormat;
+
 /// An exporter the environment can choose for a signal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Exporter {
@@ -38,6 +40,8 @@ pub(crate) struct EnvConfig {
     pub(crate) logs: Vec<Exporter>,
     pub(crate) trace_context: bool,
     pub(crate) prometheus_addr: String,
+    /// `OXTEL_LOG_FORMAT`, if set: a format, or `None` for `none`.
+    pub(crate) local_format: Option<Option<LocalFormat>>,
     pub(crate) warnings: Vec<String>,
 }
 
@@ -131,6 +135,20 @@ impl EnvConfig {
             format!("{host}:{port}")
         };
 
+        let local_format = get("OXTEL_LOG_FORMAT").and_then(|v| {
+            if v.trim().eq_ignore_ascii_case("none") {
+                return Some(None);
+            }
+            let format = LocalFormat::from_name(&v);
+            if format.is_none() {
+                warnings.push(format!(
+                    "OXTEL_LOG_FORMAT={} isn't text, json, ecs or none; ignored",
+                    v.trim()
+                ));
+            }
+            format.map(Some)
+        });
+
         EnvConfig {
             disabled,
             traces,
@@ -138,6 +156,7 @@ impl EnvConfig {
             logs,
             trace_context,
             prometheus_addr,
+            local_format,
             warnings,
         }
     }
@@ -166,6 +185,7 @@ mod tests {
                 logs: vec![Exporter::Otlp],
                 trace_context: true,
                 prometheus_addr: "localhost:9464".into(),
+                local_format: None,
                 warnings: vec![],
             }
         );
@@ -211,6 +231,21 @@ mod tests {
             c.warnings.is_empty(),
             "no OTLP, so the protocol doesn't matter"
         );
+    }
+
+    #[test]
+    fn the_local_format_can_be_chosen_or_turned_off() {
+        assert_eq!(
+            config(&[("OXTEL_LOG_FORMAT", "ECS")]).local_format,
+            Some(Some(LocalFormat::Ecs))
+        );
+        assert_eq!(
+            config(&[("OXTEL_LOG_FORMAT", "none")]).local_format,
+            Some(None)
+        );
+        let c = config(&[("OXTEL_LOG_FORMAT", "pretty")]);
+        assert_eq!(c.local_format, None, "left to the program");
+        assert_eq!(c.warnings.len(), 1);
     }
 
     #[test]
