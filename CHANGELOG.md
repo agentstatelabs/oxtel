@@ -14,6 +14,7 @@ All notable changes to oxtel are recorded here. The format follows
 ### Added
 - **A startup line that says what was set up**, in plain words: where log lines go and in what format, and where traces, metrics and logs are sent, or that they aren't and which variable changes that. `install` logs it at `info` with the target `oxtel`, and `Guard::summary` and `Telemetry::summary` return it. Endpoint URLs are shown without credentials or query strings.
 - `OtlpHttpExporter::protocol` and `Protocol::name`.
+- **A logs-only build.** `oxtel` with `default-features = false` writes local text, JSON or ECS logs and pulls in no HTTP or TLS crates; CI checks the dependency tree. [`examples/logs.rs`](examples/logs.rs) shows structured logs with no collector and no configuration.
 - `OXTEL_LOG_FORMAT=auto`, the new default.
 - `OXTEL_LOG_OUTPUT=stderr|stdout` and `Builder::with_local_logs_output(LogOutput::Stdout)`, to move local logs to standard output. Standard error stays the default, since standard output is the protocol channel for MCP servers over stdio.
 - A bad `OXTEL_LOG_FORMAT` or `OXTEL_LOG_OUTPUT` is now reported when a configuration file is in use, too.
