@@ -3,6 +3,7 @@
 use std::sync::Arc;
 
 use crate::export::{BatchConfig, ExportError, ProcessorStats};
+use crate::logs::data::LogRecord;
 use crate::logs::export::LogExporter;
 use crate::logs::layer::{LogLayer, LogLimits, Shared};
 use crate::logs::processor::{
@@ -51,29 +52,18 @@ impl Drop for LoggerProvider {
 }
 
 enum ProcessorChoice {
-    None,
     Simple(Box<dyn FnOnce(Resource) -> SimpleLogProcessor>),
     Batch(Box<dyn FnOnce(Resource) -> BatchLogProcessor>),
     Custom(Arc<dyn LogProcessor>),
 }
 
 /// Builds a [`LoggerProvider`].
+#[derive(Default)]
 pub struct LoggerProviderBuilder {
     resource: Option<Resource>,
     limits: Option<LogLimits>,
     code_attributes: bool,
-    processor: ProcessorChoice,
-}
-
-impl Default for LoggerProviderBuilder {
-    fn default() -> Self {
-        LoggerProviderBuilder {
-            resource: None,
-            limits: None,
-            code_attributes: false,
-            processor: ProcessorChoice::None,
-        }
-    }
+    processors: Vec<ProcessorChoice>,
 }
 
 impl LoggerProviderBuilder {
@@ -96,12 +86,14 @@ impl LoggerProviderBuilder {
         self
     }
 
-    /// Export each record as it's emitted, on the emitting thread. For
-    /// tests.
+    /// Export each record as it's emitted, on the emitting thread. For tests
+    /// and the console. Exporters and processors add up: each record goes to
+    /// all of them.
     pub fn with_simple_exporter(mut self, exporter: impl LogExporter) -> Self {
-        self.processor = ProcessorChoice::Simple(Box::new(move |resource| {
-            SimpleLogProcessor::new(exporter, resource)
-        }));
+        self.processors
+            .push(ProcessorChoice::Simple(Box::new(move |resource| {
+                SimpleLogProcessor::new(exporter, resource)
+            })));
         self
     }
 
@@ -117,27 +109,39 @@ impl LoggerProviderBuilder {
         exporter: impl LogExporter,
         config: BatchConfig,
     ) -> Self {
-        self.processor = ProcessorChoice::Batch(Box::new(move |resource| {
-            BatchLogProcessor::new(exporter, resource, config)
-        }));
+        self.processors
+            .push(ProcessorChoice::Batch(Box::new(move |resource| {
+                BatchLogProcessor::new(exporter, resource, config)
+            })));
         self
     }
 
     /// Use your own processor. It receives records with no resource
     /// attached; give it one yourself.
     pub fn with_processor(mut self, processor: impl LogProcessor) -> Self {
-        self.processor = ProcessorChoice::Custom(Arc::new(processor));
+        self.processors
+            .push(ProcessorChoice::Custom(Arc::new(processor)));
         self
     }
 
     /// The provider.
     pub fn build(self) -> LoggerProvider {
         let resource = self.resource.unwrap_or_else(Resource::from_env);
-        let processor: Arc<dyn LogProcessor> = match self.processor {
-            ProcessorChoice::None => Arc::new(NoopLogProcessor),
-            ProcessorChoice::Simple(make) => Arc::new(make(resource)),
-            ProcessorChoice::Batch(make) => Arc::new(make(resource)),
-            ProcessorChoice::Custom(p) => p,
+        let mut processors: Vec<Arc<dyn LogProcessor>> = self
+            .processors
+            .into_iter()
+            .map(|choice| -> Arc<dyn LogProcessor> {
+                match choice {
+                    ProcessorChoice::Simple(make) => Arc::new(make(resource.clone())),
+                    ProcessorChoice::Batch(make) => Arc::new(make(resource.clone())),
+                    ProcessorChoice::Custom(p) => p,
+                }
+            })
+            .collect();
+        let processor: Arc<dyn LogProcessor> = match processors.len() {
+            0 => Arc::new(NoopLogProcessor),
+            1 => processors.remove(0),
+            _ => Arc::new(FanOut(processors)),
         };
         LoggerProvider {
             shared: Arc::new(Shared {
@@ -146,5 +150,44 @@ impl LoggerProviderBuilder {
                 code_attributes: self.code_attributes,
             }),
         }
+    }
+}
+
+/// Hands each record to several processors.
+struct FanOut(Vec<Arc<dyn LogProcessor>>);
+
+impl LogProcessor for FanOut {
+    fn on_emit(&self, item: LogRecord) {
+        if let Some((last, rest)) = self.0.split_last() {
+            for p in rest {
+                p.on_emit(item.clone());
+            }
+            last.on_emit(item);
+        }
+    }
+
+    fn force_flush(&self) -> Result<(), ExportError> {
+        self.0
+            .iter()
+            .map(|p| p.force_flush())
+            .fold(Ok(()), Result::and)
+    }
+
+    fn shutdown(&self) -> Result<(), ExportError> {
+        self.0
+            .iter()
+            .map(|p| p.shutdown())
+            .fold(Ok(()), Result::and)
+    }
+
+    fn stats(&self) -> ProcessorStats {
+        self.0
+            .iter()
+            .map(|p| p.stats())
+            .fold(ProcessorStats::default(), |a, b| ProcessorStats {
+                exported: a.exported + b.exported,
+                export_failed: a.export_failed + b.export_failed,
+                dropped: a.dropped + b.dropped,
+            })
     }
 }

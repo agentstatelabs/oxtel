@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use crate::export::{BatchConfig, ExportError, ProcessorStats};
 use crate::resource::Resource;
+use crate::trace::data::SpanData;
 use crate::trace::export::SpanExporter;
 use crate::trace::layer::{Shared, SpanLimits, TraceLayer};
 use crate::trace::processor::{
@@ -52,7 +53,6 @@ impl Drop for TracerProvider {
 }
 
 enum ProcessorChoice {
-    None,
     Simple(Box<dyn FnOnce(Resource) -> SimpleSpanProcessor>),
     Batch(Box<dyn FnOnce(Resource) -> BatchSpanProcessor>),
     Custom(Arc<dyn SpanProcessor>),
@@ -64,7 +64,7 @@ pub struct TracerProviderBuilder {
     sampler: Option<Sampler>,
     limits: Option<SpanLimits>,
     span_events: bool,
-    processor: ProcessorChoice,
+    processors: Vec<ProcessorChoice>,
 }
 
 impl Default for TracerProviderBuilder {
@@ -74,7 +74,7 @@ impl Default for TracerProviderBuilder {
             sampler: None,
             limits: None,
             span_events: true,
-            processor: ProcessorChoice::None,
+            processors: Vec::new(),
         }
     }
 }
@@ -105,11 +105,14 @@ impl TracerProviderBuilder {
         self
     }
 
-    /// Export each span as it ends, on the ending thread. For tests.
+    /// Export each span as it ends, on the ending thread. For tests and the
+    /// console. Exporters and processors add up: each span goes to all of
+    /// them.
     pub fn with_simple_exporter(mut self, exporter: impl SpanExporter) -> Self {
-        self.processor = ProcessorChoice::Simple(Box::new(move |resource| {
-            SimpleSpanProcessor::new(exporter, resource)
-        }));
+        self.processors
+            .push(ProcessorChoice::Simple(Box::new(move |resource| {
+                SimpleSpanProcessor::new(exporter, resource)
+            })));
         self
     }
 
@@ -125,27 +128,39 @@ impl TracerProviderBuilder {
         exporter: impl SpanExporter,
         config: BatchConfig,
     ) -> Self {
-        self.processor = ProcessorChoice::Batch(Box::new(move |resource| {
-            BatchSpanProcessor::new(exporter, resource, config)
-        }));
+        self.processors
+            .push(ProcessorChoice::Batch(Box::new(move |resource| {
+                BatchSpanProcessor::new(exporter, resource, config)
+            })));
         self
     }
 
     /// Use your own processor. It receives spans with no resource attached;
     /// give it one yourself.
     pub fn with_processor(mut self, processor: impl SpanProcessor) -> Self {
-        self.processor = ProcessorChoice::Custom(Arc::new(processor));
+        self.processors
+            .push(ProcessorChoice::Custom(Arc::new(processor)));
         self
     }
 
     /// The provider.
     pub fn build(self) -> TracerProvider {
         let resource = self.resource.unwrap_or_else(Resource::from_env);
-        let processor: Arc<dyn SpanProcessor> = match self.processor {
-            ProcessorChoice::None => Arc::new(NoopSpanProcessor),
-            ProcessorChoice::Simple(make) => Arc::new(make(resource)),
-            ProcessorChoice::Batch(make) => Arc::new(make(resource)),
-            ProcessorChoice::Custom(p) => p,
+        let mut processors: Vec<Arc<dyn SpanProcessor>> = self
+            .processors
+            .into_iter()
+            .map(|choice| -> Arc<dyn SpanProcessor> {
+                match choice {
+                    ProcessorChoice::Simple(make) => Arc::new(make(resource.clone())),
+                    ProcessorChoice::Batch(make) => Arc::new(make(resource.clone())),
+                    ProcessorChoice::Custom(p) => p,
+                }
+            })
+            .collect();
+        let processor: Arc<dyn SpanProcessor> = match processors.len() {
+            0 => Arc::new(NoopSpanProcessor),
+            1 => processors.remove(0),
+            _ => Arc::new(FanOut(processors)),
         };
         TracerProvider {
             shared: Arc::new(Shared {
@@ -155,5 +170,44 @@ impl TracerProviderBuilder {
                 span_events: self.span_events,
             }),
         }
+    }
+}
+
+/// Hands each span to several processors.
+struct FanOut(Vec<Arc<dyn SpanProcessor>>);
+
+impl SpanProcessor for FanOut {
+    fn on_end(&self, item: SpanData) {
+        if let Some((last, rest)) = self.0.split_last() {
+            for p in rest {
+                p.on_end(item.clone());
+            }
+            last.on_end(item);
+        }
+    }
+
+    fn force_flush(&self) -> Result<(), ExportError> {
+        self.0
+            .iter()
+            .map(|p| p.force_flush())
+            .fold(Ok(()), Result::and)
+    }
+
+    fn shutdown(&self) -> Result<(), ExportError> {
+        self.0
+            .iter()
+            .map(|p| p.shutdown())
+            .fold(Ok(()), Result::and)
+    }
+
+    fn stats(&self) -> ProcessorStats {
+        self.0
+            .iter()
+            .map(|p| p.stats())
+            .fold(ProcessorStats::default(), |a, b| ProcessorStats {
+                exported: a.exported + b.exported,
+                export_failed: a.export_failed + b.export_failed,
+                dropped: a.dropped + b.dropped,
+            })
     }
 }

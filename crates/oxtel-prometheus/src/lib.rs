@@ -10,6 +10,9 @@
 //!   `# EOF`;
 //! - **the classic text format** (0.0.4) for everything else.
 //!
+//! A program with an HTTP server can serve [`PrometheusExporter::render`]
+//! itself; one without can run a [`PrometheusServer`].
+//!
 //! Names follow OpenTelemetry's Prometheus compatibility rules: dots become
 //! underscores, the unit becomes a suffix (`_seconds`, `_bytes`), counters
 //! end in `_total`, and the resource becomes `target_info`.
@@ -31,9 +34,11 @@
 
 mod names;
 mod render;
+mod server;
 
 pub use names::{family_name, label_name, sample_name, unit_suffix};
 pub use render::{Format, Options, render};
+pub use server::PrometheusServer;
 
 use oxtel_sdk::Resource;
 use oxtel_sdk::metrics::MeterProvider;
