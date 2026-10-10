@@ -1,7 +1,7 @@
 //! OTLP exporters for [oxtel](https://github.com/agentstatelabs/oxtel).
 //!
-//! [`OtlpHttpExporter`] sends spans, metrics and log records over OTLP/HTTP
-//! with protobuf bodies, to an OpenTelemetry Collector or any backend that
+//! [`OtlpHttpExporter`] sends spans, metrics and log records over OTLP/HTTP,
+//! with protobuf or JSON bodies, to an OpenTelemetry Collector or any backend that
 //! accepts OTLP. One exporter, cloned, serves every pipeline:
 //!
 //! ```no_run
@@ -35,8 +35,11 @@
 
 #[cfg(feature = "http-proto")]
 mod http;
+pub mod json;
 pub mod proto;
 pub mod transform;
 
 #[cfg(feature = "http-proto")]
-pub use http::{OtlpHttpExporter, OtlpHttpExporterBuilder, Signal, parse_headers, resolve_url};
+pub use http::{
+    OtlpHttpExporter, OtlpHttpExporterBuilder, Protocol, Signal, parse_headers, resolve_url,
+};

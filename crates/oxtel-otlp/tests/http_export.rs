@@ -15,7 +15,7 @@ use oxtel_otlp::proto::collector::trace::v1::{
     ExportTracePartialSuccess, ExportTraceServiceRequest, ExportTraceServiceResponse,
 };
 use oxtel_otlp::proto::common::v1::any_value::Value as AnyValue;
-use oxtel_otlp::{OtlpHttpExporter, Signal};
+use oxtel_otlp::{OtlpHttpExporter, Protocol, Signal};
 use oxtel_sdk::context::TraceFlags;
 use oxtel_sdk::logs::{InMemoryLogExporter, LogExporter, LogRecord, LoggerProvider};
 use oxtel_sdk::metrics::{
@@ -730,4 +730,80 @@ fn the_meter_provider_pushes_over_otlp() {
         sum.data_points[0].value,
         Some(oxtel_otlp::proto::metrics::v1::number_data_point::Value::AsInt(2))
     );
+}
+
+#[test]
+fn json_bodies_carry_the_same_request() {
+    let reply = br#"{"partialSuccess":{"rejectedSpans":"1","errorMessage":"late"}}"#.to_vec();
+    let (base, seen) = receiver(vec![(
+        200,
+        vec![("Content-Type", "application/json".into())],
+        reply,
+    )]);
+    let exporter = OtlpHttpExporter::builder()
+        .with_endpoint(&base)
+        .with_protocol(Protocol::HttpJson)
+        .build();
+    let (batch, remote) = spans();
+    SpanExporter::export(&exporter, &batch, &resource()).unwrap();
+    assert_eq!(
+        exporter.rejected(Signal::Traces),
+        1,
+        "read from the JSON reply"
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen[0].path, "/v1/traces");
+    assert_eq!(seen[0].header("content-type"), Some("application/json"));
+    let doc: serde_json::Value = serde_json::from_slice(&seen[0].body).unwrap();
+    let spans = doc["resourceSpans"][0]["scopeSpans"][0]["spans"]
+        .as_array()
+        .unwrap();
+    assert_eq!(spans.len(), 2);
+    let server = spans.iter().find(|s| s["name"] == "GET /items").unwrap();
+    assert_eq!(server["traceId"], remote.trace_id.to_string());
+    assert_eq!(server["parentSpanId"], remote.span_id.to_string());
+}
+
+/// Runs in a child process with the logs protocol set to JSON.
+fn export_with_a_json_logs_protocol() {
+    let exporter = OtlpHttpExporter::builder().build();
+    let (spans, _) = spans();
+    SpanExporter::export(&exporter, &spans, &resource()).unwrap();
+    let (records, _) = log_records();
+    LogExporter::export(&exporter, &records, &resource()).unwrap();
+}
+
+#[test]
+fn each_signal_takes_its_protocol_from_the_environment() {
+    const CHILD: &str = "OXTEL_TEST_CHILD";
+    if std::env::var_os(CHILD).is_some() {
+        export_with_a_json_logs_protocol();
+        return;
+    }
+    let (base, seen) = receiver(vec![(200, vec![], vec![]), (200, vec![], vec![])]);
+    let output = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "each_signal_takes_its_protocol_from_the_environment",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .env("OTEL_EXPORTER_OTLP_ENDPOINT", &base)
+        .env("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/json")
+        .env_remove("OTEL_EXPORTER_OTLP_PROTOCOL")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "child failed:\n{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(
+        seen[0].header("content-type"),
+        Some("application/x-protobuf")
+    );
+    assert_eq!(seen[1].path, "/v1/logs");
+    assert_eq!(seen[1].header("content-type"), Some("application/json"));
+    assert!(serde_json::from_slice::<serde_json::Value>(&seen[1].body).is_ok());
 }

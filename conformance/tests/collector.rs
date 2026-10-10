@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use oxtel_otlp::OtlpHttpExporter;
+use oxtel_otlp::{OtlpHttpExporter, Protocol};
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::context::TraceFlags;
 use oxtel_sdk::logs::LoggerProvider;
@@ -78,7 +78,12 @@ fn spans_named<'a>(requests: &'a [Value], name: &str) -> Vec<&'a Value> {
 #[test]
 #[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
 fn traces_reach_the_collector_intact() {
-    for gzip in [false, true] {
+    for (gzip, protocol) in [
+        (false, Protocol::HttpProtobuf),
+        (true, Protocol::HttpProtobuf),
+        (false, Protocol::HttpJson),
+        (true, Protocol::HttpJson),
+    ] {
         let run = run_id();
         let provider = TracerProvider::builder()
             .with_resource(
@@ -93,6 +98,7 @@ fn traces_reach_the_collector_intact() {
                 OtlpHttpExporter::builder()
                     .with_endpoint(&otlp_base())
                     .with_gzip(gzip)
+                    .with_protocol(protocol)
                     .build(),
             )
             .build();
@@ -142,7 +148,11 @@ fn traces_reach_the_collector_intact() {
         let requests = lines_with("traces.json", &run, 1, Duration::from_secs(20));
         let server = spans_named(&requests, "GET /items");
         let load = spans_named(&requests, "load");
-        assert_eq!((server.len(), load.len()), (1, 1), "gzip={gzip}");
+        assert_eq!(
+            (server.len(), load.len()),
+            (1, 1),
+            "gzip={gzip} {protocol:?}"
+        );
         let (server, load) = (server[0], load[0]);
 
         assert_eq!(server["traceId"], remote.trace_id.to_string());
@@ -200,6 +210,11 @@ fn log_records(requests: &[Value]) -> Vec<(&str, &Value)> {
 #[test]
 #[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
 fn logs_reach_the_collector_intact() {
+    logs_in(Protocol::HttpProtobuf);
+    logs_in(Protocol::HttpJson);
+}
+
+fn logs_in(protocol: Protocol) {
     let run = run_id();
     let resource = Resource::builder()
         .without_env()
@@ -217,6 +232,7 @@ fn logs_reach_the_collector_intact() {
         .with_batch_exporter(
             OtlpHttpExporter::builder()
                 .with_endpoint(&otlp_base())
+                .with_protocol(protocol)
                 .build(),
         )
         .build();
@@ -406,6 +422,11 @@ fn the_collector_scrapes_openmetrics_with_exemplars() {
 #[test]
 #[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
 fn metrics_reach_the_collector_over_otlp() {
+    metrics_in(Protocol::HttpProtobuf);
+    metrics_in(Protocol::HttpJson);
+}
+
+fn metrics_in(protocol: Protocol) {
     let run = run_id();
     let tracer = TracerProvider::builder()
         .with_resource(Resource::builder().without_env().build())
@@ -422,6 +443,7 @@ fn metrics_reach_the_collector_over_otlp() {
         .with_periodic_exporter_config(
             OtlpHttpExporter::builder()
                 .with_endpoint(&otlp_base())
+                .with_protocol(protocol)
                 .build(),
             PeriodicReaderConfig {
                 interval: Duration::from_secs(3600),

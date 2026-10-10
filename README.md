@@ -33,7 +33,7 @@ By default everything goes over OTLP/HTTP to `localhost:4318`. The environment c
 |---|---|
 | `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (default), `console`, `none` |
 | `OTEL_METRICS_EXPORTER` | `otlp` (default), `prometheus` (serves `/metrics` on port 9464), `console`, `none` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`, `_HEADERS`, `_COMPRESSION`, `_TIMEOUT` | where and how OTLP is sent, for all signals or each one |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`, `_HEADERS`, `_PROTOCOL`, `_COMPRESSION`, `_TIMEOUT` | where and how OTLP is sent (`http/protobuf` or `http/json`), for all signals or each one |
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | the resource |
 | `OTEL_SDK_DISABLED` | `true` turns it all off, except local logs |
 | `OXTEL_LOG_FORMAT` | local logs on standard error: `text`, `json` (flat, OpenTelemetry field names), `ecs` (Elastic Common Schema) or `none`; overrides the program's `with_local_logs` |
@@ -53,7 +53,7 @@ Try it without a collector: `OTEL_TRACES_EXPORTER=console OTEL_LOGS_EXPORTER=con
 | **Local logs** | Each event as a line on standard error, beside or instead of export: text for people, flat JSON with fields under their OpenTelemetry names, or ECS JSON for Elastic. Lines carry their span's trace and span ids. |
 | **Metrics** | A `metrics` recorder: counters, gauges, histograms, pushed over OTLP every `OTEL_METRIC_EXPORT_INTERVAL` or scraped by Prometheus, or both. Counters adapt to contention. Each metric has a cardinality limit, with an overflow series beyond it. Histograms in seconds get the semantic conventions' duration buckets. |
 | **Exemplars** | Measurements made in a sampled span keep its trace and span ids (`OTEL_METRICS_EXEMPLAR_FILTER`). |
-| **OTLP** | Traces, metrics and logs over OTLP/HTTP with protobuf bodies, optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
+| **OTLP** | Traces, metrics and logs over OTLP/HTTP with protobuf or JSON bodies (`OTEL_EXPORTER_OTLP_PROTOCOL`), optionally gzipped, with retries as the OTLP spec defines them. One exporter serves every signal, each with its own endpoint, headers, compression and timeout. The types are generated from the official protocol definitions. |
 | **Prometheus** | OpenMetrics 1.0, with exemplars, or the classic text format, negotiated per scrape. Names follow OpenTelemetry's Prometheus compatibility rules. Serve it from your own HTTP server, or from oxtel's built-in endpoint. |
 | **Console** | Readable lines on standard output for spans, log records and metrics, for development. |
 | **Propagation** | W3C Trace Context and Baggage, parsed strictly. |
