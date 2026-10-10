@@ -24,6 +24,10 @@ fn child(name: &str, vars: &[(&str, &str)]) -> Output {
         "OTEL_RESOURCE_ATTRIBUTES",
         "OXTEL_LOG_FORMAT",
         "OTEL_CONFIG_FILE",
+        "OTEL_EXPORTER_OTLP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_LOGS_ENDPOINT",
     ] {
         command.env_remove(var);
     }
@@ -121,6 +125,26 @@ fn otel_sdk_disabled_turns_everything_off() {
         ],
     );
     assert!(!String::from_utf8_lossy(&output.stdout).contains("nobody hears this"));
+}
+
+#[test]
+fn nothing_is_exported_until_configured() {
+    if in_child() {
+        let guard = oxtel::init().expect("install");
+        assert!(guard.logger_provider().is_none(), "no log pipeline");
+        assert!(guard.meter_provider().is_none(), "no metrics pipeline");
+        tracing::info_span!("request").in_scope(|| tracing::info!("handled"));
+        metrics::counter!("requests.handled").increment(1);
+        // OTLP to a missing collector would retry until the deadline.
+        let started = std::time::Instant::now();
+        guard.shutdown().unwrap();
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(1),
+            "nothing waited to be sent"
+        );
+        return;
+    }
+    child("nothing_is_exported_until_configured", &[]);
 }
 
 #[test]

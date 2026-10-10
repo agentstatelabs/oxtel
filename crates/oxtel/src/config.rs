@@ -67,9 +67,22 @@ impl EnvConfig {
         let mut warnings = Vec::new();
         let disabled =
             get("OTEL_SDK_DISABLED").is_some_and(|v| v.trim().eq_ignore_ascii_case("true"));
+        let endpoint = get("OTEL_EXPORTER_OTLP_ENDPOINT").is_some();
         let mut exporters = |signal: Signal| {
             let var = format!("OTEL_{}_EXPORTER", signal.name());
-            let raw = get(&var).unwrap_or_else(|| "otlp".to_string());
+            // The specification's default is `otlp`, to localhost. oxtel's
+            // is `otlp` only once an endpoint says where, so nothing leaves
+            // the process until someone asks. Naming `otlp` still gets the
+            // localhost default.
+            let raw = get(&var).unwrap_or_else(|| {
+                let signal_endpoint =
+                    get(&format!("OTEL_EXPORTER_OTLP_{}_ENDPOINT", signal.name())).is_some();
+                if endpoint || signal_endpoint {
+                    "otlp".into()
+                } else {
+                    "none".into()
+                }
+            });
             let mut chosen = Vec::new();
             for name in raw.split(',').map(|n| n.trim().to_ascii_lowercase()) {
                 let exporter = match name.as_str() {
@@ -187,20 +200,46 @@ mod tests {
     }
 
     #[test]
-    fn defaults_follow_the_specification() {
+    fn nothing_is_exported_until_configured() {
         assert_eq!(
             config(&[]),
             EnvConfig {
                 disabled: false,
-                traces: vec![Exporter::Otlp],
-                metrics: vec![Exporter::Otlp],
-                logs: vec![Exporter::Otlp],
+                traces: vec![],
+                metrics: vec![],
+                logs: vec![],
                 trace_context: true,
                 prometheus_addr: "localhost:9464".into(),
                 local_format: None,
                 warnings: vec![],
             }
         );
+    }
+
+    #[test]
+    fn an_endpoint_or_a_named_exporter_turns_export_on() {
+        let c = config(&[("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318")]);
+        assert_eq!(c.traces, vec![Exporter::Otlp]);
+        assert_eq!(c.metrics, vec![Exporter::Otlp]);
+        assert_eq!(c.logs, vec![Exporter::Otlp]);
+
+        let c = config(&[(
+            "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+            "http://collector:4318/v1/traces",
+        )]);
+        assert_eq!(c.traces, vec![Exporter::Otlp]);
+        assert!(c.metrics.is_empty() && c.logs.is_empty(), "only traces");
+
+        let c = config(&[("OTEL_METRICS_EXPORTER", "otlp")]);
+        assert_eq!(c.metrics, vec![Exporter::Otlp], "to the default endpoint");
+        assert!(c.traces.is_empty() && c.logs.is_empty());
+
+        let c = config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+        ]);
+        assert!(c.logs.is_empty(), "an explicit choice wins");
+        assert_eq!(c.traces, vec![Exporter::Otlp]);
     }
 
     #[test]
@@ -225,6 +264,7 @@ mod tests {
     #[test]
     fn unsupported_protocols_fall_back_to_http_protobuf() {
         let c = config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
             ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
             ("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf"),
         ]);

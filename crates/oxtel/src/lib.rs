@@ -23,10 +23,14 @@
 //!
 //! | Signal | From | To (`OTEL_*_EXPORTER`) |
 //! |---|---|---|
-//! | Traces | `tracing` spans | `otlp` (default), `console`, `none` |
-//! | Logs | `tracing` events, and `log` records with the `log` feature | `otlp` (default), `console`, `none` |
-//! | Metrics | the `metrics` facade | `otlp` (default), `prometheus`, `console`, `none` |
+//! | Traces | `tracing` spans | `otlp`, `console`, `none` |
+//! | Logs | `tracing` events, and `log` records with the `log` feature | `otlp`, `console`, `none` |
+//! | Metrics | the `metrics` facade | `otlp`, `prometheus`, `console`, `none` |
 //!
+//! - Nothing is exported until it's configured. Setting
+//!   `OTEL_EXPORTER_OTLP_ENDPOINT`, or a signal's own endpoint, makes `otlp`
+//!   the default for those signals. The specification's default is `otlp`
+//!   to `localhost:4318` even then; naming `otlp` still gets that.
 //! - `OTEL_CONFIG_FILE`, with the `config` feature (on by default), names a
 //!   declarative configuration file to build everything from instead: see
 //!   [`oxtel_config`](https://docs.rs/oxtel-config).

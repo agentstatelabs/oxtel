@@ -32,12 +32,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-By default everything goes over OTLP/HTTP to `localhost:4318`. The environment chooses otherwise:
+Nothing leaves the process until you say where. Set `OTEL_EXPORTER_OTLP_ENDPOINT`, for example to `http://localhost:4318`, and traces, metrics and logs go there over OTLP/HTTP. This is the one place oxtel departs from the specification, whose default sends to `localhost:4318` even when nothing is set; naming the exporter, as in `OTEL_TRACES_EXPORTER=otlp`, still does that. The environment chooses the rest:
 
 | Variable | Choices |
 |---|---|
-| `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (default), `console`, `none` |
-| `OTEL_METRICS_EXPORTER` | `otlp` (default), `prometheus` (serves `/metrics` on port 9464), `console`, `none` |
+| `OTEL_TRACES_EXPORTER`, `OTEL_LOGS_EXPORTER` | `otlp` (the default once an endpoint is set), `console`, `none` |
+| `OTEL_METRICS_EXPORTER` | `otlp` (the default once an endpoint is set), `prometheus` (serves `/metrics` on port 9464), `console`, `none` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT`, `_HEADERS`, `_PROTOCOL`, `_COMPRESSION`, `_TIMEOUT` | where and how OTLP is sent (`http/protobuf` or `http/json`), for all signals or each one |
 | `OTEL_SERVICE_NAME`, `OTEL_RESOURCE_ATTRIBUTES` | the resource |
 | `OTEL_CONFIG_FILE` | a declarative configuration file (schema 1.x) to use instead of the variables below; see [`examples/otel-config.yaml`](examples/otel-config.yaml) |
