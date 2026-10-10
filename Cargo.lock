@@ -1265,6 +1265,7 @@ dependencies = [
  "metrics",
  "oxtel-sdk",
  "prost",
+ "serde_json",
  "tracing",
  "tracing-subscriber",
  "ureq",

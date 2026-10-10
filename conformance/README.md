@@ -3,11 +3,11 @@
 These tests send oxtel's output to a real OpenTelemetry Collector and check
 what it decoded, through the Collector's file exporter:
 
-- **Traces** over OTLP/HTTP, with and without gzip: ids, parents, the
+- **Traces** over OTLP/HTTP, protobuf and JSON, with and without gzip: ids, parents, the
   remote-parent flag bits, kinds, typed attributes, status, events, links.
-- **Logs** over OTLP/HTTP: severity, body, event name, typed attributes,
+- **Logs** over OTLP/HTTP, protobuf and JSON: severity, body, event name, typed attributes,
   scopes from targets, and the trace and span ids of the enclosing span.
-- **Metrics** pushed over OTLP/HTTP: sums, gauges and histograms, their
+- **Metrics** pushed over OTLP/HTTP, protobuf and JSON: sums, gauges and histograms, their
   temporality, units, descriptions and exemplars.
 - **Metrics** scraped by the Collector's Prometheus receiver from oxtel's
   `/metrics` (OpenMetrics): names, types, labels, values, and exemplars that

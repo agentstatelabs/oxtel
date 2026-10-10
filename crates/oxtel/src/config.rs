@@ -87,6 +87,7 @@ impl EnvConfig {
                 };
                 if let Some(protocol) = protocol.map(|p| p.trim().to_ascii_lowercase())
                     && protocol != "http/protobuf"
+                    && protocol != "http/json"
                 {
                     let warning =
                         format!("{var}={protocol} isn't supported yet; using http/protobuf");

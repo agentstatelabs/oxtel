@@ -17,6 +17,14 @@ All notable changes to oxtel are recorded here. The format follows
 - **A `traceparent` containing multi-byte characters made the parser panic.** It sliced the header at fixed byte offsets, which can fall inside a character. It now rejects non-ASCII input, as the spec requires, before slicing. Extraction through `http::HeaderMap` was never affected, because its non-ASCII values were already skipped. Other carriers, such as a `HashMap` or MCP `params._meta`, could reach the panic. Found by the new property tests.
 
 ### Added
+- **OTLP/JSON** (`http/json`) for every signal, chosen by `OTEL_EXPORTER_OTLP_[SIGNAL_]PROTOCOL` or `with_protocol`. It follows the OTLP specification's JSON rules:
+  - lowerCamelCase field names;
+  - trace and span ids in hex, not base64;
+  - enums as integers, and 64-bit integers as strings;
+  - `NaN` and infinities as the protobuf mapping's strings;
+  - default values left out.
+
+  The encoder is oxtel's own, built from the same request structs as protobuf, so there's no new dependency. Partial-success counts are read from JSON replies too. Collector conformance runs every signal in both encodings.
 - **Resource detection** (`oxtel_sdk::resource`). The default resource now describes where the process runs. What's detected ranks below `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_SERVICE_NAME` and the builder.
   - `service.instance.id`: a random UUID per process start.
   - `host.name`, `host.arch` and, on Linux, `host.id` (the machine id).

@@ -66,6 +66,80 @@ impl Signal {
     }
 }
 
+/// How request bodies are encoded.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Protocol {
+    /// Protobuf (`http/protobuf`), the default.
+    HttpProtobuf,
+    /// OTLP/JSON (`http/json`).
+    HttpJson,
+}
+
+impl Protocol {
+    /// The protocol named `http/protobuf` or `http/json`.
+    pub fn from_name(name: &str) -> Option<Self> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "http/protobuf" => Some(Protocol::HttpProtobuf),
+            "http/json" => Some(Protocol::HttpJson),
+            _ => None,
+        }
+    }
+}
+
+/// A request in either encoding, and how to read its response's rejected
+/// count.
+trait OtlpRequest: Message {
+    /// The rejected count's field in a partial-success response.
+    const REJECTED: &'static str;
+    fn json(&self) -> String;
+    fn rejected(reply: &[u8]) -> Option<i64>;
+}
+
+impl OtlpRequest for crate::proto::collector::trace::v1::ExportTraceServiceRequest {
+    const REJECTED: &'static str = "rejectedSpans";
+    fn json(&self) -> String {
+        crate::json::traces(self)
+    }
+    fn rejected(reply: &[u8]) -> Option<i64> {
+        Some(
+            ExportTraceServiceResponse::decode(reply)
+                .ok()?
+                .partial_success?
+                .rejected_spans,
+        )
+    }
+}
+
+impl OtlpRequest for crate::proto::collector::logs::v1::ExportLogsServiceRequest {
+    const REJECTED: &'static str = "rejectedLogRecords";
+    fn json(&self) -> String {
+        crate::json::logs(self)
+    }
+    fn rejected(reply: &[u8]) -> Option<i64> {
+        Some(
+            ExportLogsServiceResponse::decode(reply)
+                .ok()?
+                .partial_success?
+                .rejected_log_records,
+        )
+    }
+}
+
+impl OtlpRequest for crate::proto::collector::metrics::v1::ExportMetricsServiceRequest {
+    const REJECTED: &'static str = "rejectedDataPoints";
+    fn json(&self) -> String {
+        crate::json::metrics(self)
+    }
+    fn rejected(reply: &[u8]) -> Option<i64> {
+        Some(
+            ExportMetricsServiceResponse::decode(reply)
+                .ok()?
+                .partial_success?
+                .rejected_data_points,
+        )
+    }
+}
+
 /// Exports to an OTLP/HTTP receiver, such as an OpenTelemetry Collector:
 /// spans to `{endpoint}/v1/traces`, metrics to `{endpoint}/v1/metrics` and
 /// log records to `{endpoint}/v1/logs`.
@@ -90,6 +164,7 @@ struct Inner {
 struct Target {
     url: String,
     headers: Vec<(String, String)>,
+    json: bool,
     gzip: bool,
     timeout: Duration,
     rejected: AtomicU64,
@@ -116,21 +191,19 @@ impl OtlpHttpExporter {
             .load(Ordering::Relaxed)
     }
 
-    /// Send `message`, carrying `items` of `signal`, retrying as the
-    /// specification allows. `rejected_in` reads the rejected count from a
-    /// success response.
+    /// Send `request`, carrying `items` of `signal`, in the signal's
+    /// encoding, retrying as the specification allows.
     fn send(
         &self,
         signal: Signal,
         items: usize,
-        message: &impl Message,
-        rejected_in: impl Fn(&[u8]) -> Option<i64>,
+        request: &impl OtlpRequest,
     ) -> Result<(), ExportError> {
         let target = &self.inner.targets[signal as usize];
         let started = Instant::now();
         let mut status = None;
         let mut rejected = 0;
-        let result = self.deliver(target, message, &rejected_in, &mut status, &mut rejected);
+        let result = self.deliver(target, request, &mut status, &mut rejected);
         target
             .metrics
             .record(items, rejected, &result, started.elapsed(), status);
@@ -139,15 +212,18 @@ impl OtlpHttpExporter {
 
     /// The retry loop of [`send`](Self::send). Leaves the last HTTP status
     /// and the rejected count in `status` and `rejected`.
-    fn deliver(
+    fn deliver<R: OtlpRequest>(
         &self,
         target: &Target,
-        message: &impl Message,
-        rejected_in: &impl Fn(&[u8]) -> Option<i64>,
+        request: &R,
         status: &mut Option<u16>,
         rejected: &mut usize,
     ) -> Result<(), ExportError> {
-        let mut body = message.encode_to_vec();
+        let mut body = if target.json {
+            request.json().into_bytes()
+        } else {
+            request.encode_to_vec()
+        };
         if target.gzip {
             let mut encoder =
                 flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
@@ -167,7 +243,12 @@ impl OtlpHttpExporter {
                     *status = Some(code);
                     if (200..300).contains(&code) {
                         let reply = response.body_mut().read_to_vec().unwrap_or_default();
-                        if let Some(n) = rejected_in(&reply)
+                        let count = if target.json {
+                            crate::json::rejected(&reply, R::REJECTED)
+                        } else {
+                            R::rejected(&reply)
+                        };
+                        if let Some(n) = count
                             && n > 0
                         {
                             target.rejected.fetch_add(n as u64, Ordering::Relaxed);
@@ -215,7 +296,14 @@ impl OtlpHttpExporter {
             .config()
             .timeout_global(Some(timeout.max(Duration::from_millis(1))))
             .build()
-            .header("Content-Type", "application/x-protobuf");
+            .header(
+                "Content-Type",
+                if target.json {
+                    "application/json"
+                } else {
+                    "application/x-protobuf"
+                },
+            );
         if target.gzip {
             request = request.header("Content-Encoding", "gzip");
         }
@@ -230,6 +318,7 @@ impl OtlpHttpExporter {
 struct TargetConfig {
     url: String,
     headers: Vec<(String, String)>,
+    protocol: Protocol,
     gzip: bool,
     timeout: Duration,
 }
@@ -250,6 +339,8 @@ impl OtlpHttpExporterBuilder {
     ///   `http://localhost:4318/v1/{signal}`;
     /// - headers: `OTEL_EXPORTER_OTLP_HEADERS`, then
     ///   `OTEL_EXPORTER_OTLP_{SIGNAL}_HEADERS`;
+    /// - encoding: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]PROTOCOL`, `http/protobuf`
+    ///   (the default) or `http/json`; others fall back to protobuf;
     /// - compression: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]COMPRESSION` (`gzip`);
     /// - timeout: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]TIMEOUT`, in milliseconds.
     pub fn from_env() -> Self {
@@ -274,6 +365,10 @@ impl OtlpHttpExporterBuilder {
             }
             let compression =
                 specific("COMPRESSION").or_else(|| var("OTEL_EXPORTER_OTLP_COMPRESSION"));
+            let protocol = specific("PROTOCOL")
+                .or_else(|| var("OTEL_EXPORTER_OTLP_PROTOCOL"))
+                .and_then(|p| Protocol::from_name(&p))
+                .unwrap_or(Protocol::HttpProtobuf);
             let timeout = specific("TIMEOUT")
                 .or_else(|| var("OTEL_EXPORTER_OTLP_TIMEOUT"))
                 .and_then(|ms| ms.trim().parse::<u64>().ok())
@@ -281,6 +376,7 @@ impl OtlpHttpExporterBuilder {
             TargetConfig {
                 url,
                 headers,
+                protocol,
                 gzip: compression.is_some_and(|c| c.trim().eq_ignore_ascii_case("gzip")),
                 timeout,
             }
@@ -312,6 +408,14 @@ impl OtlpHttpExporterBuilder {
         let (name, value) = (name.into(), value.into());
         for target in &mut self.targets {
             target.headers.push((name.clone(), value.clone()));
+        }
+        self
+    }
+
+    /// Encode every signal with `protocol`.
+    pub fn with_protocol(mut self, protocol: Protocol) -> Self {
+        for target in &mut self.targets {
+            target.protocol = protocol;
         }
         self
     }
@@ -354,6 +458,7 @@ impl OtlpHttpExporterBuilder {
                     Target {
                         url: t.url.clone(),
                         headers: t.headers.clone(),
+                        json: t.protocol == Protocol::HttpJson,
                         gzip: t.gzip,
                         timeout: t.timeout,
                         rejected: AtomicU64::new(0),
@@ -456,14 +561,6 @@ impl SpanExporter for OtlpHttpExporter {
             Signal::Traces,
             batch.len(),
             &traces_request(batch, resource),
-            |reply| {
-                Some(
-                    ExportTraceServiceResponse::decode(reply)
-                        .ok()?
-                        .partial_success?
-                        .rejected_spans,
-                )
-            },
         )
     }
 }
@@ -473,19 +570,7 @@ impl LogExporter for OtlpHttpExporter {
         if batch.is_empty() {
             return Ok(());
         }
-        self.send(
-            Signal::Logs,
-            batch.len(),
-            &logs_request(batch, resource),
-            |reply| {
-                Some(
-                    ExportLogsServiceResponse::decode(reply)
-                        .ok()?
-                        .partial_success?
-                        .rejected_log_records,
-                )
-            },
-        )
+        self.send(Signal::Logs, batch.len(), &logs_request(batch, resource))
     }
 }
 
@@ -495,19 +580,7 @@ impl MetricExporter for OtlpHttpExporter {
             return Ok(());
         }
         let points = metrics.iter().map(|m| m.points.len()).sum();
-        self.send(
-            Signal::Metrics,
-            points,
-            &metrics_request(metrics, resource),
-            |reply| {
-                Some(
-                    ExportMetricsServiceResponse::decode(reply)
-                        .ok()?
-                        .partial_success?
-                        .rejected_data_points,
-                )
-            },
-        )
+        self.send(Signal::Metrics, points, &metrics_request(metrics, resource))
     }
 }
 
