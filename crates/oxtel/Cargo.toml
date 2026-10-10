@@ -13,7 +13,9 @@ homepage.workspace = true
 authors.workspace = true
 
 [features]
-default = ["otlp", "log"]
+default = ["otlp", "log", "config"]
+# Read a declarative configuration file named by OTEL_CONFIG_FILE.
+config = ["dep:oxtel-config"]
 # OTLP over HTTP: an HTTP client with rustls, and gzip.
 otlp = ["dep:oxtel-otlp"]
 # Forward records from the `log` crate into `tracing`, and so into oxtel.
@@ -22,6 +24,7 @@ log = ["dep:tracing-log"]
 [dependencies]
 oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1" }
 oxtel-otlp = { path = "../oxtel-otlp", version = "0.0.1", optional = true }
+oxtel-config = { path = "../oxtel-config", version = "0.0.1", optional = true }
 oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.0.1" }
 metrics = "0.24"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }

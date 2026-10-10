@@ -27,6 +27,9 @@
 //! | Logs | `tracing` events, and `log` records with the `log` feature | `otlp` (default), `console`, `none` |
 //! | Metrics | the `metrics` facade | `otlp` (default), `prometheus`, `console`, `none` |
 //!
+//! - `OTEL_CONFIG_FILE`, with the `config` feature (on by default), names a
+//!   declarative configuration file to build everything from instead: see
+//!   [`oxtel_config`](https://docs.rs/oxtel-config).
 //! - `OTEL_SDK_DISABLED=true` turns all of it off. Local logs and layers
 //!   added with [`Builder::with_layer`] still run.
 //! - The resource comes from `OTEL_SERVICE_NAME` and
@@ -54,6 +57,7 @@ mod builder;
 mod config;
 mod filter;
 mod guard;
+mod plan;
 pub mod propagation;
 
 pub use builder::{Builder, Error, Telemetry};

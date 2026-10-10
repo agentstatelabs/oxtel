@@ -23,6 +23,7 @@ fn child(name: &str, vars: &[(&str, &str)]) -> Output {
         "OTEL_SERVICE_NAME",
         "OTEL_RESOURCE_ATTRIBUTES",
         "OXTEL_LOG_FORMAT",
+        "OTEL_CONFIG_FILE",
     ] {
         command.env_remove(var);
     }
@@ -162,4 +163,118 @@ fn local_output_survives_a_disabled_sdk_and_follows_oxtel_log_format() {
         stderr.contains(r#""level":"WARN","target":"env","message":"still visible","key":"items""#),
         "{stderr}"
     );
+}
+
+/// A configuration file in the temporary directory, unique to this run.
+fn config_file(name: &str, text: &str) -> String {
+    let path = std::env::temp_dir().join(format!(
+        "oxtel-{name}-{}-{}.yaml",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, text).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+#[test]
+fn a_configuration_file_replaces_the_environment() {
+    if in_child() {
+        let guard = oxtel::init().expect("install");
+        let port: u16 = std::env::var("PROMETHEUS_PORT").unwrap().parse().unwrap();
+        assert_eq!(guard.prometheus_addr().map(|a| a.port()), Some(port));
+        tracing::info_span!("request").in_scope(|| {
+            tracing::warn!("slow lookup");
+            metrics::counter!("requests.handled").increment(1);
+        });
+        let response = scrape(port);
+        assert!(response.contains("requests_handled_total"), "{response}");
+        assert!(
+            response.contains("service_name=\"from-the-file\""),
+            "{response}"
+        );
+        assert!(!response.contains("otel_scope_name"), "without_scope_info");
+        guard.shutdown().unwrap();
+        return;
+    }
+    let port = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port()
+        .to_string();
+    let path = config_file(
+        "file",
+        r#"
+file_format: "1.2"
+resource:
+  attributes:
+    - name: service.name
+      value: ${CHECKOUT_NAME:-unnamed}
+propagator:
+  composite: [{tracecontext: }]
+tracer_provider:
+  sampler:
+    always_on:
+  processors:
+    - simple:
+        exporter:
+          console:
+logger_provider:
+  processors:
+    - simple:
+        exporter:
+          console:
+meter_provider:
+  views:
+    - selector: {instrument_name: x}
+  readers:
+    - pull:
+        exporter:
+          prometheus/development:
+            host: 127.0.0.1
+            port: ${PROMETHEUS_PORT}
+            without_scope_info: true
+"#,
+    );
+    let output = child(
+        "a_configuration_file_replaces_the_environment",
+        &[
+            ("OTEL_CONFIG_FILE", &path),
+            ("CHECKOUT_NAME", "from-the-file"),
+            ("PROMETHEUS_PORT", &port),
+            // Ignored: the file is the configuration.
+            ("OTEL_TRACES_EXPORTER", "none"),
+            ("OTEL_LOGS_EXPORTER", "none"),
+            ("OTEL_SERVICE_NAME", "from-the-environment"),
+        ],
+    );
+    let _ = std::fs::remove_file(&path);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(" span \"request\""), "{stdout}");
+    assert!(stdout.contains(" WARN env: slow lookup"), "{stdout}");
+    assert!(
+        stdout.contains("`meter_provider.views` isn't supported yet"),
+        "the file's unsupported parts are reported: {stdout}"
+    );
+}
+
+#[test]
+fn a_configuration_file_that_cant_be_read_is_an_error() {
+    if in_child() {
+        let error = oxtel::init().err().expect("an error");
+        let oxtel::Error::Config(message) = error else {
+            panic!("{error:?}")
+        };
+        assert!(message.contains("file_format"), "{message}");
+        return;
+    }
+    let path = config_file("bad", "file_format: \"2.0\"\n");
+    child(
+        "a_configuration_file_that_cant_be_read_is_an_error",
+        &[("OTEL_CONFIG_FILE", &path)],
+    );
+    let _ = std::fs::remove_file(&path);
 }

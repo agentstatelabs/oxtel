@@ -1,0 +1,74 @@
+# An OpenTelemetry declarative configuration file oxtel reads, with
+# OTEL_CONFIG_FILE=examples/otel-config.yaml. Everything oxtel acts on is
+# here; CI checks it against the published 1.2 schema. Values can come from
+# the environment: ${NAME}, or ${NAME:-default}.
+file_format: "1.2"
+disabled: false
+
+resource:
+  attributes:
+    - name: service.name
+      value: checkout
+    - name: deployment.environment.name
+      value: ${DEPLOYMENT_ENVIRONMENT:-development}
+  detection/development:
+    detectors:
+      - service:
+      - host:
+      - os:
+      - process:
+      - container:
+
+attribute_limits:
+  attribute_count_limit: 128
+
+propagator:
+  composite:
+    - tracecontext:
+    - baggage:
+
+tracer_provider:
+  sampler:
+    parent_based:
+      root:
+        trace_id_ratio_based:
+          ratio: 0.25
+  limits:
+    event_count_limit: 128
+    link_count_limit: 128
+  processors:
+    - batch:
+        schedule_delay: 5000
+        max_queue_size: 2048
+        exporter:
+          otlp_http:
+            endpoint: http://localhost:4318/v1/traces
+            compression: gzip
+            headers:
+              - name: x-tenant
+                value: ${TENANT:-default}
+
+meter_provider:
+  exemplar_filter: trace_based
+  readers:
+    - periodic:
+        interval: 60000
+        exporter:
+          otlp_http:
+            endpoint: http://localhost:4318/v1/metrics
+            encoding: json
+    - pull:
+        exporter:
+          prometheus/development:
+            host: localhost
+            port: 9464
+
+logger_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_http:
+            endpoint: http://localhost:4318/v1/logs
+    - simple:
+        exporter:
+          console:

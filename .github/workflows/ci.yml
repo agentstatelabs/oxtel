@@ -103,6 +103,25 @@ jobs:
         if: always()
         run: docker logs otelcol 2>&1 | tail -100
 
+  # Declarative configuration files, checked against the schema the
+  # OpenTelemetry configuration project publishes.
+  config-schema:
+    runs-on: ubuntu-latest
+    env:
+      SCHEMA_VERSION: "v1.2.0"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Validate the example configuration files
+        shell: bash
+        run: |
+          python3 -m pip install --user "check-jsonschema==0.29.4"
+          curl -sSfL -o "$RUNNER_TEMP/schema.json" \
+            "https://raw.githubusercontent.com/open-telemetry/opentelemetry-configuration/${SCHEMA_VERSION}/opentelemetry_configuration.json"
+          ~/.local/bin/check-jsonschema --schemafile "$RUNNER_TEMP/schema.json" \
+            examples/otel-config.yaml \
+            crates/oxtel-config/tests/fixtures/otel-sdk-config.yaml \
+            crates/oxtel-config/tests/fixtures/otel-getting-started.yaml
+
   # Coverage-guided fuzzing of the parsers that read other services'
   # requests (traceparent, tracestate, baggage) and configuration
   # (OTEL_RESOURCE_ATTRIBUTES, OTEL_EXPORTER_OTLP_HEADERS). Each target runs

@@ -1,0 +1,19 @@
+[package]
+name = "oxtel-config"
+description = "OpenTelemetry declarative configuration (OTEL_CONFIG_FILE) for oxtel: YAML with environment substitution, read into a typed model"
+readme = "../../README.md"
+keywords = ["opentelemetry", "configuration", "yaml", "telemetry"]
+categories = ["config", "development-tools::debugging"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+yaml-rust2 = { version = "0.13", default-features = false }
+
+[lints]
+workspace = true

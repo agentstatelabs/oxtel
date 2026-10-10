@@ -331,6 +331,12 @@ pub struct OtlpHttpExporterBuilder {
     initial_backoff: Duration,
 }
 
+impl Default for OtlpHttpExporterBuilder {
+    fn default() -> Self {
+        OtlpHttpExporterBuilder::new()
+    }
+}
+
 impl OtlpHttpExporterBuilder {
     /// Settings from the environment, for each signal (`TRACES`, `METRICS`,
     /// `LOGS`):
@@ -344,7 +350,19 @@ impl OtlpHttpExporterBuilder {
     /// - compression: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]COMPRESSION` (`gzip`);
     /// - timeout: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]TIMEOUT`, in milliseconds.
     pub fn from_env() -> Self {
-        let var = |name: &str| std::env::var(name).ok().filter(|v| !v.trim().is_empty());
+        Self::with_lookup(&|name| std::env::var(name).ok())
+    }
+
+    /// The defaults, without reading the environment: every signal to
+    /// `http://localhost:4318/v1/{signal}`, protobuf, uncompressed, with a
+    /// 10 s timeout. For configuration from elsewhere, such as a
+    /// declarative configuration file.
+    pub fn new() -> Self {
+        Self::with_lookup(&|_| None)
+    }
+
+    fn with_lookup(lookup: &dyn Fn(&str) -> Option<String>) -> Self {
+        let var = |name: &str| lookup(name).filter(|v| !v.trim().is_empty());
         let target = |signal: Signal| {
             let specific =
                 |setting: &str| var(&format!("OTEL_EXPORTER_OTLP_{}_{setting}", signal.env()));

@@ -46,6 +46,17 @@ pub(crate) struct EnvConfig {
 }
 
 impl EnvConfig {
+    /// `OXTEL_LOG_FORMAT` alone, for a configuration from a file.
+    #[cfg(feature = "config")]
+    pub(crate) fn local_format_from_env() -> Option<Option<LocalFormat>> {
+        let mut c = Self::from_lookup(|name| {
+            (name == "OXTEL_LOG_FORMAT")
+                .then(|| std::env::var(name).ok())
+                .flatten()
+        });
+        c.local_format.take()
+    }
+
     pub(crate) fn from_env() -> Self {
         Self::from_lookup(|name| std::env::var(name).ok())
     }
