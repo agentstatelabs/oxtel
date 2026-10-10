@@ -1228,7 +1228,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "metrics",
  "oxtel-config",
@@ -1264,7 +1264,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-config"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "yaml-rust2",
 ]
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-otlp"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "fastrand",
  "flate2",
@@ -1312,7 +1312,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-prometheus"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "metrics",
  "oxtel-sdk",
@@ -1322,7 +1322,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-rmcp"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "http",
  "metrics",
@@ -1338,7 +1338,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-sdk"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "fastrand",
  "http",
@@ -1355,11 +1355,11 @@ dependencies = [
 
 [[package]]
 name = "oxtel-semconv"
-version = "0.0.1"
+version = "0.1.0"
 
 [[package]]
 name = "oxtel-tower"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "axum",
  "http",

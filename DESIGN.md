@@ -1,6 +1,6 @@
 # oxtel: OpenTelemetry-compatible telemetry for Rust, native to `tracing` and `metrics`
 
-_Status: **draft design**, Phase 0. "oxtel" is a working name. Written 2026-10-08._
+_Written 2026-10-08. Phases 0 and 1 are built; 0.1 was released on 2026-10-10._
 
 ## 1. Why
 

@@ -18,7 +18,7 @@ default = []
 client = ["rmcp/client"]
 
 [dependencies]
-oxtel-sdk = { path = "../oxtel-sdk", version = "0.0.1" }
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.1.0" }
 http = "1.4"
 metrics = "0.24"
 rmcp = { version = "1.6", default-features = false, features = ["server"] }
@@ -31,6 +31,10 @@ oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
 rmcp = { version = "1.6", default-features = false, features = ["server", "client"] }
 tokio = { version = "1", features = ["macros", "rt", "io-util"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[package.metadata.docs.rs]
+# Document the APIs behind features too.
+all-features = true
 
 [lints]
 workspace = true

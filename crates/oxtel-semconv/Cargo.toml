@@ -11,13 +11,17 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 authors.workspace = true
-include = ["src/**", "Cargo.toml"]
+include = ["src/**", "Cargo.toml", "LICENSE"]
 
 [features]
 default = []
 # Conventions whose stability is development: they may change or vanish in
 # any release of the conventions.
 experimental = []
+
+[package.metadata.docs.rs]
+# Document the APIs behind features too.
+all-features = true
 
 [lints]
 workspace = true
