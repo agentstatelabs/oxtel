@@ -1,0 +1,17 @@
+---
+// Shows code from a file in the repository; see src/lib/include.ts.
+import { Code } from '@astrojs/starlight/components';
+import { include, type Selection } from '../lib/include';
+
+interface Props extends Selection {
+	file: string;
+	/** Defaults to the file's path, or "Cargo.toml" for a dependency list. */
+	title?: string;
+}
+
+const { file, title, ...selection } = Astro.props;
+const { code, lang } = include(file, selection);
+const shown = title ?? (selection.doc === 'toml' ? 'Cargo.toml' : selection.doc ? undefined : file);
+---
+
+<Code code={code} lang={lang} title={shown} />

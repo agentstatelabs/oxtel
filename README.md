@@ -92,7 +92,7 @@ Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs o
 INFO oxtel: log lines: standard error, as text; traces: http://localhost:4318/v1/traces (OTLP); metrics: http://localhost:4318/v1/metrics (OTLP); logs: http://localhost:4318/v1/logs (OTLP)
 ```
 
-The [guide](docs/guide.md) has the few terms worth knowing, recipes (Prometheus, Elastic, hosted backends, MCP servers) and what to do when nothing shows up.
+The [guide](https://agentstatelabs.github.io/oxtel/guide/) has [the few terms worth knowing](https://agentstatelabs.github.io/oxtel/guide/words/), [recipes](https://agentstatelabs.github.io/oxtel/guide/recipes/) (Prometheus, Elastic, hosted backends, MCP servers) and [what to do when nothing shows up](https://agentstatelabs.github.io/oxtel/guide/troubleshooting/).
 
 ## Settings
 
@@ -162,7 +162,7 @@ Against `tracing-opentelemetry` with the official `opentelemetry_sdk` 0.33, and 
 
 ## oxtel and eBPF
 
-eBPF tools such as OpenTelemetry's [OBI](https://opentelemetry.io/docs/zero-code/obi/) trace requests from the Linux kernel, with no code changes, for every program on a machine. They see a program from the outside, where requests arrive and leave. oxtel works inside it: your spans and fields, log lines with trace ids, and the work between requests. The two complement each other. The [guide](docs/guide.md#telemetry-without-changing-code-ebpf) explains how eBPF instrumentation works and how to run both.
+eBPF tools such as OpenTelemetry's [OBI](https://opentelemetry.io/docs/zero-code/obi/) trace requests from the Linux kernel, with no code changes, for every program on a machine. They see a program from the outside, where requests arrive and leave. oxtel works inside it: your spans and fields, log lines with trace ids, and the work between requests. The two complement each other. The [guide](https://agentstatelabs.github.io/oxtel/guide/ebpf/) explains how eBPF instrumentation works and how to run both.
 
 ## How it's checked
 

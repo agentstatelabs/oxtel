@@ -49,6 +49,14 @@ jobs:
         run: cargo run -q -p oxtel-examples --example logs 2>&1 >/dev/null | grep -F '"message":"signed in","user.id":42'
       - run: cargo doc --workspace --no-deps
 
+  examples:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Each example builds with only the dependencies it documents
+        run: cargo run -q -p xtask -- check-examples
+
   msrv:
     runs-on: ubuntu-latest
     steps:

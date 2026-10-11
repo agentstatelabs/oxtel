@@ -33,6 +33,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // until main returns.
     let _telemetry = oxtel::init()?;
 
+    // ANCHOR: serve
     let app = Router::new()
         .route("/orders/{id}", get(order))
         .layer(oxtel_tower::HttpServerLayer::new());
@@ -47,5 +48,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await?;
+    // ANCHOR_END: serve
     Ok(())
 }

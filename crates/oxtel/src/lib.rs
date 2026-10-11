@@ -23,8 +23,8 @@
 //! nothing anywhere. Set `OTEL_EXPORTER_OTLP_ENDPOINT` (for example
 //! `http://localhost:4318`) and traces, metrics and logs go there over OTLP.
 //! On startup, oxtel logs one line saying what it set up. The
-//! [guide](https://github.com/agentstatelabs/oxtel/blob/main/docs/guide.md)
-//! covers the rest in plain words.
+//! [guide](https://agentstatelabs.github.io/oxtel/guide/) covers the rest in
+//! plain words.
 //!
 //! What gets set up:
 //!

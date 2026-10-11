@@ -1,0 +1,61 @@
+---
+title: oxtel
+description: Structured logs with one line of setup, and OpenTelemetry traces, metrics and logs when you want them, for Rust.
+template: splash
+hero:
+  title: Telemetry for Rust, without the ceremony
+  tagline: Structured logs with one line of setup. OpenTelemetry traces, metrics and logs when you want them, without changing your code.
+  image:
+    alt: ''
+    dark: ../../assets/mark-dark.svg
+    light: ../../assets/mark-light.svg
+  actions:
+    - text: Get started
+      link: start/
+      icon: right-arrow
+    - text: View on GitHub
+      link: https://github.com/agentstatelabs/oxtel
+      icon: external
+      variant: minimal
+---
+
+import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import Example from '../../components/Example.astro';
+
+## One line to start
+
+<Example file="examples/logs.rs" doc="toml" />
+
+<Example file="examples/logs.rs" />
+
+On a terminal you get readable text. Anywhere else, such as a container whose output goes to a log shipper, you get one JSON object per line, with each field as a key of its own. Lines inside a span carry its fields and its trace id, so you can find everything one request did.
+
+## Why oxtel
+
+<CardGrid>
+	<Card title="Your code doesn't change" icon="seti:rust">
+		Rust code already records spans, logs and metrics with `tracing` and `metrics`. oxtel turns them into log lines, OTLP for collectors and backends, and Prometheus scrapes. There's no second API to learn, and no bridge between two.
+	</Card>
+	<Card title="Nothing is sent until you say so" icon="approve-check">
+		With no settings, you get log lines and nothing else. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and traces, metrics and logs go there, with no rebuild.
+	</Card>
+	<Card title="It tells you what it did" icon="information">
+		When it starts, one line says where each kind of telemetry goes. If sending fails, it says so, and what to check.
+	</Card>
+	<Card title="Built to the standards" icon="list-format">
+		The OpenTelemetry settings, protocol and naming conventions. CI checks the output against a real OpenTelemetry Collector and Prometheus's own checker.
+	</Card>
+</CardGrid>
+
+## Where to go next
+
+<CardGrid>
+	<LinkCard title="Get started" description="Logs, then requests, then sending it all somewhere: three steps." href="/start/" />
+	<LinkCard title="Structured logs only" description="JSON log lines and nothing else, without a single HTTP or TLS crate." href="/scenarios/logs/" />
+	<LinkCard title="A web service" description="An axum service where every request gets a span, a log line and duration metrics." href="/scenarios/web-service/" />
+	<LinkCard title="The guide" description="The words worth knowing, recipes for common setups, and what to check when something's wrong." href="/guide/" />
+</CardGrid>
+
+<Aside>
+	oxtel is at 0.2, and early. Traces, logs and metrics work end to end, and the API will change before 1.0.
+</Aside>

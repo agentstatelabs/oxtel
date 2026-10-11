@@ -1,0 +1,41 @@
+---
+title: Structured logs only
+description: JSON log lines from tracing, with no collector, no configuration, and no HTTP or TLS crates.
+---
+
+import Example from '../../../components/Example.astro';
+
+For a program that wants good log lines and nothing else: a command-line tool, a service whose platform ships its standard error to a log store, or a first step before traces.
+
+## The code
+
+<Example file="examples/logs.rs" />
+
+## Dependencies
+
+<Example file="examples/logs.rs" doc="toml" />
+
+With these, the same program sends traces, metrics and logs to a collector the day `OTEL_EXPORTER_OTLP_ENDPOINT` is set, with no code changes. If it will only ever want logs, leave oxtel's export code out, and every HTTP and TLS crate with it:
+
+<Example file="examples/logs.rs" doc="toml" nth={2} />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/logs.rs" doc="bash" />
+
+## Choices
+
+Everything here is set from the environment, so it can change without a rebuild:
+
+| Setting | What it does |
+|---|---|
+| `RUST_LOG` | how much is logged: `info` (the default), `debug`, `warn`, or per module, such as `info,hyper=warn` |
+| `OXTEL_LOG_FORMAT` | `auto` (the default: text on a terminal, JSON otherwise), `text`, `json`, `ecs` (Elastic Common Schema) or `none` |
+| `OXTEL_LOG_OUTPUT` | `stderr` (the default) or `stdout` |
+
+## For production
+
+- JSON is already the default anywhere that isn't a terminal, such as a container or a service manager.
+- Keep the value `oxtel::init()` returns until `main` ends. Log lines are written as they happen, so for them it makes no difference; once you send telemetry somewhere, dropping it at the end of `main` is what sends the last batch.
