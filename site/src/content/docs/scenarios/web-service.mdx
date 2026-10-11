@@ -1,0 +1,33 @@
+---
+title: A web service
+description: An axum service where every request gets a span, a log line and duration metrics, sent to a collector once an endpoint is set.
+---
+
+import Example from '../../../components/Example.astro';
+
+An HTTP service built on axum. Every request gets:
+
+- a span named by its route, such as `GET /orders/{id}`, continuing the caller's trace if it sent one;
+- a log line when it finishes, with its status and duration;
+- the trace id on every log line written while handling it;
+- `http.server.request.duration` and `http.server.active_requests` metrics.
+
+## The code
+
+<Example file="examples/web.rs" />
+
+## Dependencies
+
+<Example file="examples/web.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/web.rs" doc="bash" />
+
+## For production
+
+- **Stop gracefully.** On a signal, the server finishes the requests in flight and `main` returns, so oxtel sends what's pending. Without it, the last few seconds of telemetry are lost. In a container, the platform sends `SIGTERM` rather than Ctrl-C: wait for both.
+- **Name the service.** `OTEL_SERVICE_NAME` is how backends will show it.
+- **Send it somewhere.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector, as in [Get started](/start/).

@@ -1,0 +1,43 @@
+---
+title: Get started
+description: From nothing to structured logs, then to traces and metrics in a backend, in three steps.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+import Example from '../../components/Example.astro';
+
+You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the rest when you want it.
+
+<Steps>
+
+1. **Logs.** Add oxtel and `tracing`, and call `oxtel::init()` first thing in `main`. Keep what it returns for as long as the program runs.
+
+   <Example file="examples/logs.rs" doc="toml" />
+
+   <Example file="examples/logs.rs" />
+
+   On a terminal you get text, and anywhere else one JSON object per line. Wrap work in a span, as this does with the request, and every line inside it carries the span's fields and a trace id. `RUST_LOG` chooses how much is logged: `info` by default.
+
+2. **Requests.** For a web service, add `oxtel-tower`, and one line on an axum router gives every request a span, a log line and duration metrics:
+
+   <Example file="examples/web.rs" doc="toml" />
+
+   <Example file="examples/web.rs" region="serve" />
+
+   The graceful shutdown matters: when the program is stopped, it lets `main` return, so what's still pending is sent. [A web service](/scenarios/web-service/) has the whole program.
+
+3. **Send it somewhere.** Point oxtel at an OpenTelemetry Collector, or at any backend that accepts OTLP, and traces, metrics and logs go there. There's nothing to change in your code:
+
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=shop cargo run
+   ```
+
+   To see traces on your own machine, run Jaeger, then open http://localhost:16686:
+
+   ```bash
+   docker run --rm -p 16686:16686 -p 4318:4318 jaegertracing/jaeger:latest
+   ```
+
+   Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs one line saying what it set up, and if sending fails, it says so and what to check.
+
+</Steps>
