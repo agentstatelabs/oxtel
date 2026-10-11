@@ -2,10 +2,29 @@
 
 This guide is for people who want useful logs and, later, traces and metrics, without first learning OpenTelemetry. The [README](../README.md) gets you started in three steps; this page fills in the rest.
 
+**Contents**
+
 - [The words worth knowing](#the-words-worth-knowing)
 - [Recipes](#recipes)
+  - [JSON logs in a container](#json-logs-in-a-container)
+  - [Elastic](#elastic)
+  - [A hosted backend](#a-hosted-backend)
+  - [Prometheus](#prometheus)
+  - [A web service](#a-web-service)
+  - [An MCP server](#an-mcp-server)
+  - [Turning things off](#turning-things-off)
 - [When something's wrong](#when-somethings-wrong)
+  - [No log lines at all](#no-log-lines-at-all)
+  - [Nothing arrives at the collector or backend](#nothing-arrives-at-the-collector-or-backend)
+  - [Too much output](#too-much-output)
+  - [Logs in the wrong place, or the wrong shape](#logs-in-the-wrong-place-or-the-wrong-shape)
 - [Telemetry without changing code: eBPF](#telemetry-without-changing-code-ebpf)
+  - [How eBPF instrumentation works](#how-ebpf-instrumentation-works)
+  - [What it can't see](#what-it-cant-see)
+  - [Using both](#using-both)
+- [Further reading](#further-reading)
+
+---
 
 ## The words worth knowing
 
@@ -18,12 +37,19 @@ You can use oxtel without any of these, but they're the words backends and colle
 | **Span** | A piece of work with a start and an end, such as one request or one database query: `tracing::info_span!("request")`. Events inside it carry its fields. |
 | **Trace** | All the spans of one request, across every service it touched. The **trace id** on each log line ties them together. |
 | **Metric** | A number tracked over time, such as requests served or how long they took: `metrics::counter!("orders.placed").increment(1)`. |
+| **Guard** | What `oxtel::init()` returns. Keep it until the end of `main`: dropping it sends whatever is still waiting and shuts telemetry down. |
 | **Service name** | What backends call your program. Set it with `OTEL_SERVICE_NAME`, or in code with `oxtel::builder().with_default_service_name("shop")`. |
+| **Semantic conventions** | OpenTelemetry's agreed names for common things, such as `http.response.status_code` or `http.server.request.duration`, so that backends recognise them. oxtel's layers use them. |
 | **OTLP** | The OpenTelemetry protocol: how traces, metrics and logs travel to a collector or backend. oxtel speaks it over HTTP, usually on port 4318. |
+| **Exporter** | The part that sends one kind of telemetry somewhere: `otlp` to a collector or backend, `console` to standard output, `prometheus` for scraping. The `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER` settings choose them. |
 | **Collector** | A program, usually the OpenTelemetry Collector, that receives OTLP and passes it on to one or more backends. Optional: you can send straight to a backend. |
 | **Backend** | Where you look at the data: Jaeger, Grafana, Elastic, Honeycomb, Datadog and many more accept OTLP. |
 
+---
+
 ## Recipes
+
+Each recipe is a few settings, or a few lines of code, for one common situation.
 
 ### JSON logs in a container
 
@@ -83,6 +109,8 @@ Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapp
 - Nothing at all except log lines: `OTEL_SDK_DISABLED=true`.
 - One kind of telemetry: `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none` or `OTEL_LOGS_EXPORTER=none`.
 
+---
+
 ## When something's wrong
 
 Start with what oxtel logs from the target `oxtel`. When it starts, one line says where log lines go and where traces, metrics and logs are sent, and any setting it couldn't use follows as a warning. When sending fails, a warning says where, why and what to check, at most once a minute per kind of telemetry, and another line says when sending works again. These lines appear in your local logs, but are never sent to the collector themselves.
@@ -111,6 +139,8 @@ Turn down what's noisy: `RUST_LOG=info,hyper=warn,h2=warn` keeps your own `info`
 - Text in the container, or JSON on the terminal: set `OXTEL_LOG_FORMAT` to `json` or `text`.
 - On standard error when you want standard output: `OXTEL_LOG_OUTPUT=stdout`.
 - Every line twice: a second logging layer is installed beside oxtel's, or `OTEL_LOGS_EXPORTER=console` is also printing records to standard output.
+
+---
 
 ## Telemetry without changing code: eBPF
 
@@ -157,7 +187,9 @@ They complement each other:
 - **One collector.** Both send OTLP and use W3C Trace Context, so where OBI carries trace context between services, its spans and oxtel's join into one trace.
 - **Don't trace the same server twice.** If `oxtel-tower` already traces a service's HTTP requests and OBI does too, each request appears twice. OBI's discovery settings choose which processes it instruments: leave out the services oxtel covers, or keep only one of the two for them.
 
-## Further
+---
+
+## Further reading
 
 - Every setting: the [README](../README.md#settings), and the [`oxtel` crate documentation](https://docs.rs/oxtel).
 - A configuration file instead of variables: [`examples/otel-config.yaml`](../examples/otel-config.yaml).
