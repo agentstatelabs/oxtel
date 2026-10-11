@@ -264,11 +264,12 @@ async fn metrics_follow_the_conventions() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn the_access_log_is_opt_in() {
+async fn the_access_log_is_on_unless_turned_off() {
     let h = harness();
-    send(&app(HttpServerLayer::new()), get_req("/items/1")).await;
+    let quiet = app(HttpServerLayer::new().with_access_log(false));
+    send(&quiet, get_req("/items/1")).await;
     assert!(h.logs.records().is_empty());
-    let logged = app(HttpServerLayer::new().with_access_log(true));
+    let logged = app(HttpServerLayer::new());
     send(&logged, get_req("/items/1")).await;
     send(&logged, get_req("/fail")).await;
     let records = h.logs.records();

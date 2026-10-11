@@ -54,16 +54,23 @@ The startup line shows where everything goes; it never shows the headers.
 
 ### A web service
 
-With `oxtel-tower` and its `axum` feature, one layer gives every request a span named by its route (`GET /orders/{id}`), continues the caller's trace if it sent one, and records `http.server.request.duration`:
+With `oxtel-tower` and its `axum` feature, one layer gives every request a span named by its route (`GET /orders/{id}`), continues the caller's trace if it sent one, logs a `request` line with the status and duration, and records `http.server.request.duration`:
 
 ```rust
 let _telemetry = oxtel::init()?;
 let app = Router::new()
     .route("/orders/{id}", get(order))
     .layer(oxtel_tower::HttpServerLayer::new());
+axum::serve(listener, app)
+    .with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; })
+    .await?;
 ```
 
-Call `oxtel::init()` first, so the layer finds the metrics recorder. For a line per request in your logs, add `.with_access_log(true)` to the layer.
+- Call `oxtel::init()` first, so the layer finds the metrics recorder.
+- Shut down gracefully, as above. Otherwise Ctrl-C ends the process at once, before oxtel can send what's pending.
+- `.with_access_log(false)` drops the `request` lines; `RUST_LOG=info,oxtel_tower=warn` keeps only those for failed requests.
+
+[`examples/web.rs`](../examples/web.rs) is a whole service.
 
 ### An MCP server
 
@@ -92,7 +99,7 @@ Start with what oxtel logs from the target `oxtel`. When it starts, one line say
 - **Wrong port.** oxtel speaks OTLP over HTTP, usually on port 4318. Port 4317 is OTLP over gRPC, which oxtel doesn't speak yet; it warns at startup if you point it there.
 - **The receiver refuses it.** A warning such as `refused with status 401` means the credentials are wrong or missing: check `OTEL_EXPORTER_OTLP_HEADERS`. Status 404 means nothing receives data at that path.
 - **Wrong path.** With the general endpoint, oxtel adds `/v1/traces`, `/v1/metrics` and `/v1/logs` itself. A signal's own endpoint, such as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, is used exactly as given, so it needs the full path. The startup line shows the URLs in full.
-- **The program exits too soon.** Data is sent in batches. Keep the guard until the end of `main`, and dropping it sends what's left, waiting up to 5 seconds.
+- **Ctrl-C, or the program exits too soon.** Data is sent in batches, every few seconds. Keep the guard until the end of `main`: dropping it sends what's left, waiting up to 5 seconds. A server stopped with Ctrl-C never reaches the end of `main` unless it shuts down gracefully, as in the [web service recipe](#a-web-service).
 
 ### Too much output
 

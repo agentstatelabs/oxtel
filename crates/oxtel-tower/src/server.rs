@@ -58,8 +58,8 @@ impl Default for HttpServerLayer {
 }
 
 impl HttpServerLayer {
-    /// A layer with spans, propagation and metrics on, and the access log
-    /// off. With the `axum` feature, `http.route` comes from axum's
+    /// A layer with spans, propagation, metrics and the access log on. With
+    /// the `axum` feature, `http.route` comes from axum's
     /// `MatchedPath`. Make it after installing the `metrics` recorder; see
     /// [`describe_metrics`](crate::describe_metrics).
     pub fn new() -> Self {
@@ -74,7 +74,7 @@ impl HttpServerLayer {
             config: Arc::new(Config {
                 propagate: true,
                 metrics: true,
-                access_log: false,
+                access_log: true,
                 scheme: "http",
                 route,
                 make_span: Arc::new(|info| crate::server_span!(info)),
@@ -100,7 +100,9 @@ impl HttpServerLayer {
         self
     }
 
-    /// Log each finished request as an event. Default: false.
+    /// Log each finished request as an event: `request` at `info`, or at
+    /// `error` for a 5xx. Default: true. `RUST_LOG=info,oxtel_tower=warn`
+    /// also hides it, but keeps the errors.
     pub fn with_access_log(mut self, enabled: bool) -> Self {
         self.config().access_log = enabled;
         self

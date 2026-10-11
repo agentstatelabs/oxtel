@@ -104,8 +104,42 @@ impl LocalLayer {
     }
 }
 
-/// A span's fields, kept for the lines written inside it.
-struct SpanFields(Vec<(&'static str, Value)>);
+/// A span's fields, kept for the lines written inside it. The `otel.*`
+/// fields instruct the trace layer rather than describe the work, so
+/// they're kept apart: `otel.name` names the span in text, and the rest
+/// are left out.
+#[derive(Default)]
+struct SpanFields {
+    values: Vec<(&'static str, Value)>,
+    /// `otel.name`, if set.
+    name: Option<String>,
+    /// `otel.kind` is set: the span comes from instrumentation such as
+    /// oxtel-tower's, whose name says enough in text.
+    instrumented: bool,
+}
+
+impl SpanFields {
+    /// Take `values` in, sorting out the `otel.*` fields.
+    fn absorb(&mut self, values: Vec<(&'static str, Value)>) {
+        for (k, v) in values {
+            match k {
+                "otel.name" => {
+                    self.name = Some(match v {
+                        Value::String(s) => s,
+                        other => {
+                            let mut s = String::new();
+                            text_value(&mut s, &other);
+                            s
+                        }
+                    });
+                }
+                "otel.kind" => self.instrumented = true,
+                _ if k.starts_with("otel.") => {}
+                _ => self.values.push((k, v)),
+            }
+        }
+    }
+}
 
 /// Records fields, a later value replacing an earlier one of the same name.
 /// An event's `message` is kept apart.
@@ -171,19 +205,21 @@ where
         let Some(span) = ctx.span(id) else { return };
         let mut fields = Fields::default();
         attrs.record(&mut fields);
-        span.extensions_mut().insert(SpanFields(fields.values));
+        let mut span_fields = SpanFields::default();
+        span_fields.absorb(fields.values);
+        span.extensions_mut().insert(span_fields);
     }
 
     fn on_record(&self, id: &Id, values: &Record<'_>, ctx: Context<'_, S>) {
         let Some(span) = ctx.span(id) else { return };
         let mut extensions = span.extensions_mut();
-        if let Some(SpanFields(existing)) = extensions.get_mut::<SpanFields>() {
+        if let Some(span_fields) = extensions.get_mut::<SpanFields>() {
             let mut fields = Fields {
-                values: std::mem::take(existing),
+                values: std::mem::take(&mut span_fields.values),
                 ..Fields::default()
             };
             values.record(&mut fields);
-            *existing = fields.values;
+            span_fields.absorb(fields.values);
         }
     }
 
@@ -242,12 +278,19 @@ impl<S: for<'l> LookupSpan<'l>> Line<'_, '_, '_, S> {
         let meta = self.event.metadata();
         let _ = write!(out, "{} {:>5} ", rfc3339(self.time), meta.level().as_str());
         for span in self.scope {
-            out.push_str(span.name());
-            if let Some(SpanFields(fields)) = span.extensions().get::<SpanFields>()
-                && !fields.is_empty()
+            let extensions = span.extensions();
+            let fields = extensions.get::<SpanFields>();
+            out.push_str(
+                fields
+                    .and_then(|f| f.name.as_deref())
+                    .unwrap_or(span.name()),
+            );
+            if let Some(fields) = fields
+                && !fields.instrumented
+                && !fields.values.is_empty()
             {
                 out.push('{');
-                for (i, (k, v)) in fields.iter().enumerate() {
+                for (i, (k, v)) in fields.values.iter().enumerate() {
                     if i > 0 {
                         out.push(' ');
                     }
@@ -339,8 +382,8 @@ impl<S: for<'l> LookupSpan<'l>> Line<'_, '_, '_, S> {
             None => merged.push((k, v.clone())),
         };
         for span in self.scope {
-            if let Some(SpanFields(fields)) = span.extensions().get::<SpanFields>() {
-                for (k, v) in fields {
+            if let Some(fields) = span.extensions().get::<SpanFields>() {
+                for (k, v) in &fields.values {
                     put(k, v);
                 }
             }

@@ -51,13 +51,24 @@ tracing::warn!(attempt = 2, "payment provider slow; retrying");
 // {..., "message":"payment provider slow; retrying","trace_id":"a98f5438…","span_id":"86faebde…","order.id":7,"attempt":2}
 ```
 
-For a web service, one line on an axum router does this for every request, and records request durations as metrics too (`oxtel-tower` with its `axum` feature):
+For a web service, add `oxtel-tower = { version = "0.2", features = ["axum"] }`. One line on an axum router gives every request a span, a log line, and duration metrics:
 
 ```rust
 let app = Router::new()
     .route("/orders/{id}", get(order))
     .layer(oxtel_tower::HttpServerLayer::new());
+axum::serve(listener, app)
+    // On Ctrl-C, let main return, so what's pending is sent.
+    .with_graceful_shutdown(async { let _ = tokio::signal::ctrl_c().await; })
+    .await?;
 ```
+
+```text
+INFO GET /orders/{id}: shop: looking up order order.id=7 trace_id=bcbb1bb3…
+INFO GET /orders/{id}: oxtel_tower::server: request http.response.status_code=200 http.server.request.duration=0.000041 trace_id=bcbb1bb3…
+```
+
+[`examples/web.rs`](examples/web.rs) is the whole service, runnable.
 
 For an MCP server, wrap it: `oxtel_rmcp::Instrumented::new(server)`. Logs stay on standard error, out of the protocol's way.
 

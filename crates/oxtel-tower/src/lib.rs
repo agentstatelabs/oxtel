@@ -4,7 +4,7 @@
 //!
 //! - [`HttpServerLayer`]: a span per request, continuing the caller's trace;
 //!   `http.server.request.duration` and `http.server.active_requests`; an
-//!   optional access log.
+//!   access log.
 //! - [`HttpClientLayer`]: a span per request, trace context sent along, and
 //!   `http.client.request.duration`.
 //! - [`MetricsService`]: Prometheus `/metrics` as a tower service, for an

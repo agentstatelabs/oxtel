@@ -7,11 +7,14 @@ license.workspace = true
 publish = false
 
 [dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 metrics = "0.24"
 oxtel = { path = "../crates/oxtel" }
 oxtel-otlp = { path = "../crates/oxtel-otlp" }
 oxtel-prometheus = { path = "../crates/oxtel-prometheus" }
 oxtel-sdk = { path = "../crates/oxtel-sdk" }
+oxtel-tower = { path = "../crates/oxtel-tower", features = ["axum"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
 
@@ -26,3 +29,7 @@ path = "manual.rs"
 [[example]]
 name = "logs"
 path = "logs.rs"
+
+[[example]]
+name = "web"
+path = "web.rs"
