@@ -29,6 +29,8 @@ jobs:
       - run: cargo clippy -p oxtel-rmcp --all-targets --features client
       - run: cargo test -p oxtel-rmcp --features client
       - run: cargo clippy -p oxtel-semconv --all-targets --features experimental
+      - run: cargo clippy -p oxtel-sql --all-targets --features rusqlite
+      - run: cargo test -p oxtel-sql --features rusqlite
       # oxtel without its default features: local logs only.
       - run: cargo clippy -p oxtel --no-default-features --all-targets
       - run: cargo test -p oxtel --no-default-features

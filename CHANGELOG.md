@@ -6,6 +6,14 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`oxtel-sql`: database client spans and metrics**, starting with SQLite. `oxtel_sql::rusqlite::instrument(&conn)` (the `rusqlite` feature) uses SQLite's own trace hooks, so call sites don't change. Any rusqlite from 0.33 to 0.40 works.
+  - Every statement gets a client span named by its query summary, as the database conventions define it (`SELECT users`, `INSERT shipping_details SELECT orders`), with `db.system.name`, `db.query.summary` and `db.query.text`. Statements run inside another span are its children.
+  - `db.client.operation.duration`, by system and query summary, measured by SQLite itself.
+  - `db.query.text` is the statement with every literal (strings, numbers, blobs, booleans, dollar-quoted strings) replaced by `?`, comments removed, and `IN` lists of literals collapsed, so values never reach telemetry. Placeholders stay. `oxtel_sql::record_query_text(false)` leaves it off.
+  - `oxtel_sql::summarize` and `oxtel_sql::sanitize` are public, for instrumenting other clients.
+- `db.client.operation.duration` gets the bucket bounds the conventions advise for it (1 ms to 10 s) by default. `DB_SECONDS_BUCKETS` names them.
+
 ## [0.2.0] - 2026-10-10
 
 Made to be used without knowing OpenTelemetry. `oxtel::init()` with nothing configured now gives structured logs: text on a terminal, JSON anywhere else. One variable, `OTEL_EXPORTER_OTLP_ENDPOINT`, then sends traces, metrics and logs to a collector, with no code changes. oxtel says what it set up when it starts, and says so when sending fails and what to check. The README opens with three plain steps, and a new [guide](docs/guide.md) has the terms worth knowing, recipes and troubleshooting.
