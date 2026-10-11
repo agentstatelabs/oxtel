@@ -383,6 +383,127 @@ async fn clients_from_a_pool_are_instrumented() {
     );
 }
 
+#[cfg(feature = "deadpool-postgres")]
+fn pool_metric(meters: &MeterProvider, name: &str, labels: &[(&str, &str)]) -> PointValue {
+    let family = meters
+        .collect()
+        .into_iter()
+        .find(|f| f.name == name)
+        .unwrap_or_else(|| panic!("{name} recorded"));
+    family
+        .points
+        .into_iter()
+        .find(|p| {
+            labels
+                .iter()
+                .all(|(k, v)| p.attributes.contains(&((*k).into(), (*v).into())))
+        })
+        .unwrap_or_else(|| panic!("{name} has a series for {labels:?}"))
+        .value
+}
+
+#[cfg(feature = "deadpool-postgres")]
+#[tokio::test]
+async fn the_pool_records_its_connections() {
+    use std::time::Duration;
+
+    let Some(url) = database_url() else { return };
+    let h = harness();
+    let config: tokio_postgres::Config = url.parse().unwrap();
+    let pool = |size, wait| {
+        let manager = deadpool_postgres::Manager::new(config.clone(), tokio_postgres::NoTls);
+        deadpool_postgres::Pool::builder(manager)
+            .max_size(size)
+            .wait_timeout(wait)
+            .runtime(deadpool_postgres::Runtime::Tokio1)
+            .build()
+            .unwrap()
+    };
+    let named = oxtel_sql::postgres::Pool::new(pool(2, None), &config).with_name("orders");
+
+    let first = named.get().await.unwrap();
+    let second = named.get().await.unwrap();
+    let pool_name = ("db.client.connection.pool.name", "orders");
+    let count = |state| {
+        pool_metric(
+            &h.meters,
+            "db.client.connection.count",
+            &[pool_name, ("db.client.connection.state", state)],
+        )
+    };
+    assert_eq!(count("used"), PointValue::Gauge(2.0));
+    assert_eq!(count("idle"), PointValue::Gauge(0.0));
+    drop(first);
+    assert_eq!(count("used"), PointValue::Gauge(1.0), "one returned");
+    assert_eq!(count("idle"), PointValue::Gauge(1.0));
+    drop(second);
+    assert_eq!(
+        pool_metric(&h.meters, "db.client.connection.max", &[pool_name]),
+        PointValue::Gauge(2.0)
+    );
+    assert_eq!(
+        pool_metric(
+            &h.meters,
+            "db.client.connection.pending_requests",
+            &[pool_name]
+        ),
+        PointValue::Gauge(0.0)
+    );
+    let histogram_count = |name| match pool_metric(&h.meters, name, &[pool_name]) {
+        PointValue::Histogram(h) => h.count(),
+        other => panic!("{name} isn't a histogram: {other:?}"),
+    };
+    assert_eq!(histogram_count("db.client.connection.wait_time"), 2);
+    assert_eq!(histogram_count("db.client.connection.use_time"), 2);
+
+    // A pool of one, already in use: the next caller times out.
+    let tight = oxtel_sql::postgres::Pool::new(pool(1, Some(Duration::from_millis(50))), &config)
+        .with_name("tight");
+    let held = tight.get().await.unwrap();
+    assert!(matches!(
+        tight.get().await,
+        Err(deadpool_postgres::PoolError::Timeout(_))
+    ));
+    drop(held);
+    let tight_name = ("db.client.connection.pool.name", "tight");
+    assert_eq!(
+        pool_metric(&h.meters, "db.client.connection.timeouts", &[tight_name]),
+        PointValue::Counter(1)
+    );
+    assert_eq!(
+        pool_metric(
+            &h.meters,
+            "db.client.connection.pending_requests",
+            &[tight_name]
+        ),
+        PointValue::Gauge(0.0),
+        "the caller that timed out isn't waiting any more"
+    );
+
+    // Every name and label is one the conventions define; the durations
+    // are in seconds. (oxtel records up-down counters as gauges.)
+    for family in h.meters.collect() {
+        if !family.name.starts_with("db.client.connection.") {
+            continue;
+        }
+        let definition = metric::by_name(&family.name)
+            .unwrap_or_else(|| panic!("{} isn't defined", family.name));
+        if definition.instrument == Instrument::Histogram {
+            assert_eq!(
+                family.unit.as_deref(),
+                Some(definition.unit),
+                "{}",
+                family.name
+            );
+        }
+        for point in &family.points {
+            for (key, _) in &point.attributes {
+                assert!(attribute::is_defined(key), "label {key:?} isn't defined");
+            }
+        }
+    }
+}
+
 /// `otel.*` fields steer the span itself; they aren't attributes.
 fn is_instruction(key: &str) -> bool {
     key.starts_with("otel.")
