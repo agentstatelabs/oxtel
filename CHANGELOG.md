@@ -6,23 +6,32 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-10
+
+Made to be used without knowing OpenTelemetry. `oxtel::init()` with nothing configured now gives structured logs: text on a terminal, JSON anywhere else. One variable, `OTEL_EXPORTER_OTLP_ENDPOINT`, then sends traces, metrics and logs to a collector, with no code changes. oxtel says what it set up when it starts, and says so when sending fails and what to check. The README opens with three plain steps, and a new [guide](docs/guide.md) has the terms worth knowing, recipes and troubleshooting.
+
+Two defaults change, so read the first two entries below if you use 0.1.
+
 ### Changed
-- **Nothing is exported until it's configured.** `oxtel::init()` used to send traces, metrics and logs to `localhost:4318` when no variable was set, as the specification's defaults say. Now a signal exports over OTLP once `OTEL_EXPORTER_OTLP_ENDPOINT` or its own endpoint is set, or when `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` names `otlp`, which still means `localhost:4318` by default. A program that relied on the old default sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. Configuration files are unchanged.
-- With no log pipeline and no span exporter, events are no longer kept as span events that nothing would export.
+- **Nothing is exported until it's configured.** `oxtel::init()` used to send traces, metrics and logs to `localhost:4318` when no variable was set, as the specification's defaults say. Now a signal exports over OTLP once `OTEL_EXPORTER_OTLP_ENDPOINT` or its own endpoint is set, or when `OTEL_{TRACES,METRICS,LOGS}_EXPORTER` names `otlp`, which still means `localhost:4318` by default. A program that relied on the old default sets `OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318`. Configuration files are unchanged. This is oxtel's one deliberate departure from the specification's defaults.
+- **Logs are written locally by default**, to standard error: readable text when that's a terminal, flat JSON otherwise, so containers and log shippers get JSON with nothing to set. `OXTEL_LOG_FORMAT=none` or `Builder::without_local_logs` turns them off. A writer given to `with_local_logs_writer` gets flat JSON unless a format is chosen.
 - **`oxtel-tower` logs every request by default**: a `request` line at `info` with the status and duration, or at `error` for a 5xx. `.with_access_log(false)` turns it off.
 - **Local log lines leave out `otel.*` fields**, such as `otel.name` and `otel.kind`, which instruct the trace layer rather than describe the work. In text, a span is shown by its `otel.name` (`GET /orders/{id}` rather than `HTTP server request{…}`), and the fields of instrumentation spans, those that set `otel.kind`, are left to the JSON formats.
-- **Logs are written locally by default**, to standard error: readable text when that's a terminal, flat JSON otherwise, so containers and log shippers get JSON with nothing to set. `OXTEL_LOG_FORMAT=none` or `Builder::without_local_logs` turns them off. A writer given to `with_local_logs_writer` gets flat JSON unless a format is chosen.
+- With no log pipeline and no span exporter, events are no longer kept as span events that nothing would export.
 
 ### Added
-- **A startup line that says what was set up**, in plain words: where log lines go and in what format, and where traces, metrics and logs are sent, or that they aren't and which variable changes that. `install` logs it at `info` with the target `oxtel`, and `Guard::summary` and `Telemetry::summary` return it. Endpoint URLs are shown without credentials or query strings.
-- `OtlpHttpExporter::protocol` and `Protocol::name`.
+- **A startup line that says what was set up**, in plain words: where log lines go and in what format, and where traces, metrics and logs are sent, or that they aren't and which variable changes that. `install` logs it at `info` with the target `oxtel`, and `Guard::summary` and `Telemetry::summary` return it:
+  ```text
+  log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+  ```
 - **Failed exports are reported**, in plain words, where they used to be only counted: a warning with the target `oxtel` names the destination, what went wrong and what to check (`couldn't send 1 span to http://127.0.0.1:1/v1/traces (OTLP): io: Connection refused. Is the receiver running, and reachable from here?`). After the first, failures are counted quietly and reported at most once a minute, and one line says when sending works again. A full queue that drops items is reported the same way. The warnings are raised with oxtel's own telemetry suppressed, so local logs show them but they're never exported.
-- [`examples/web.rs`](examples/web.rs): an axum service with request logs, spans and metrics, shutting down gracefully on Ctrl-C so nothing pending is lost.
 - A startup warning when an OTLP endpoint uses port 4317, the usual port for OTLP over gRPC, which oxtel doesn't speak yet.
-- `destination()` on `SpanExporter`, `LogExporter` and `MetricExporter`: where an exporter sends data, in a few words for people, without credentials. It has a default, so existing exporters keep compiling. `OtlpHttpExporter::destination(signal)` gives a signal's URL with credentials, query and fragment removed.
-- **A logs-only build.** `oxtel` with `default-features = false` writes local text, JSON or ECS logs and pulls in no HTTP or TLS crates; CI checks the dependency tree. [`examples/logs.rs`](examples/logs.rs) shows structured logs with no collector and no configuration.
+- **A logs-only build.** `oxtel` with `default-features = false` writes local text, JSON or ECS logs and pulls in no HTTP or TLS crates; CI checks the dependency tree.
+- Examples: [`examples/logs.rs`](examples/logs.rs), structured logs with no collector and no configuration; [`examples/web.rs`](examples/web.rs), an axum service with request logs, spans and metrics that shuts down gracefully on Ctrl-C, so nothing pending is lost.
 - `OXTEL_LOG_FORMAT=auto`, the new default.
 - `OXTEL_LOG_OUTPUT=stderr|stdout` and `Builder::with_local_logs_output(LogOutput::Stdout)`, to move local logs to standard output. Standard error stays the default, since standard output is the protocol channel for MCP servers over stdio.
+- `destination()` on `SpanExporter`, `LogExporter` and `MetricExporter`: where an exporter sends data, in a few words for people, without credentials. It has a default, so existing exporters keep compiling. `OtlpHttpExporter::destination(signal)` gives a signal's URL with credentials, query and fragment removed.
+- `OtlpHttpExporter::protocol` and `Protocol::name`.
 - A bad `OXTEL_LOG_FORMAT` or `OXTEL_LOG_OUTPUT` is now reported when a configuration file is in use, too.
 
 ## [0.1.0] - 2026-10-10
@@ -172,5 +181,6 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/agentstatelabs/oxtel/releases/tag/v0.1.0
