@@ -6,18 +6,24 @@
 //! OXTEL_LOG_FORMAT=ecs cargo run -p oxtel-examples --example logs
 //! ```
 //!
-//! A program that only wants logs can leave oxtel's export code out
-//! altogether, and with it every HTTP and TLS crate:
+//! A program of your own needs:
+//!
+//! ```toml
+//! [dependencies]
+//! oxtel = "0.2"
+//! tracing = "0.1"
+//! ```
+//!
+//! With these, the same program sends traces, metrics and logs to a
+//! collector once `OTEL_EXPORTER_OTLP_ENDPOINT` is set, with no code
+//! changes. A program that only ever wants logs can leave oxtel's export
+//! code out altogether, and with it every HTTP and TLS crate:
 //!
 //! ```toml
 //! [dependencies]
 //! oxtel = { version = "0.2", default-features = false }
 //! tracing = "0.1"
 //! ```
-//!
-//! With the default features, the same program sends traces, metrics and
-//! logs to a collector once `OTEL_EXPORTER_OTLP_ENDPOINT` is set, with no
-//! code changes.
 
 fn main() -> Result<(), oxtel::Error> {
     // Text on a terminal, JSON anywhere else. Keep the guard alive.

@@ -5,6 +5,9 @@
 //! - `cargo run -p xtask -- gen-semconv` regenerates `oxtel-semconv` with
 //!   OpenTelemetry Weaver ([`WEAVER_VERSION`], found as `$WEAVER` or `weaver`
 //!   on the path) from the pinned conventions releases.
+//! - `cargo run -p xtask -- check-examples` builds each example that lists
+//!   its dependencies as a program of its own, with only those
+//!   dependencies.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -45,8 +48,15 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("check-examples") => match check_examples() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("check-examples failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         _ => {
-            eprintln!("usage: cargo run -p xtask -- gen-proto | gen-semconv");
+            eprintln!("usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples");
             ExitCode::from(2)
         }
     }
@@ -139,4 +149,108 @@ fn gen_semconv() -> Result<(), Box<dyn std::error::Error>> {
         println!("generated {label} into {}", crate_dir.join(out).display());
     }
     Ok(())
+}
+
+/// Builds each example whose documentation has ```` ```toml ```` blocks of
+/// `[dependencies]` as a program of its own, once for each block, with
+/// exactly those dependencies, so the lines shown to readers (in the
+/// example and on the site) are known to be enough. The oxtel crates come
+/// from this checkout.
+fn check_examples() -> Result<(), Box<dyn std::error::Error>> {
+    let root = workspace_root();
+    let work = root.join("target/example-check");
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut examples: Vec<PathBuf> = std::fs::read_dir(root.join("examples"))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
+        .collect();
+    examples.sort();
+    let mut checked = 0;
+    for path in examples {
+        let source = std::fs::read_to_string(&path)?;
+        let example = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("example");
+        for (i, dependencies) in documented_dependencies(&source).into_iter().enumerate() {
+            // The first list builds as `logs`, a second as `logs-2`, and so on.
+            let name = match i {
+                0 => example.to_string(),
+                _ => format!("{example}-{}", i + 1),
+            };
+            let dir = work.join(&name);
+            std::fs::create_dir_all(dir.join("src"))?;
+            let mut manifest = format!(
+                "[package]\nname = \"example-{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[workspace]\n\n{dependencies}\n[patch.crates-io]\n"
+            );
+            for krate in dependency_names(&dependencies).filter(|n| n.starts_with("oxtel")) {
+                let local = root.join("crates").join(krate);
+                if !local.is_dir() {
+                    return Err(format!("{}: no crate {krate} in crates/", path.display()).into());
+                }
+                manifest.push_str(&format!(
+                    "{krate} = {{ path = {:?} }}\n",
+                    local.display().to_string()
+                ));
+            }
+            std::fs::write(dir.join("Cargo.toml"), manifest)?;
+            std::fs::write(dir.join("src/main.rs"), &source)?;
+            // Start from the workspace's versions rather than the newest.
+            std::fs::copy(root.join("Cargo.lock"), dir.join("Cargo.lock"))?;
+            println!(
+                "checking examples/{example}.rs with dependency list {}",
+                i + 1
+            );
+            let status = Command::new(&cargo)
+                .current_dir(&dir)
+                .args(["check", "--quiet"])
+                .env("CARGO_TARGET_DIR", work.join("target"))
+                .status()?;
+            if !status.success() {
+                let list = i + 1;
+                return Err(format!(
+                    "examples/{example}.rs doesn't build with its dependency list {list}"
+                )
+                .into());
+            }
+            checked += 1;
+        }
+    }
+    if checked == 0 {
+        return Err("no example documents its dependencies".into());
+    }
+    println!("{checked} documented dependency lists are enough to build their examples");
+    Ok(())
+}
+
+/// The `[dependencies]` blocks in a file's `//!` documentation.
+fn documented_dependencies(source: &str) -> Vec<String> {
+    let doc = source
+        .lines()
+        .map_while(|line| line.strip_prefix("//!"))
+        .map(|line| line.strip_prefix(' ').unwrap_or(line));
+    let mut blocks = Vec::new();
+    let mut block = None::<String>;
+    for line in doc {
+        match block.take() {
+            None if line.trim() == "```toml" => block = Some(String::new()),
+            None => {}
+            Some(text) if line.trim() == "```" => blocks.push(text),
+            Some(mut text) => {
+                text.push_str(line);
+                text.push('\n');
+                block = Some(text);
+            }
+        }
+    }
+    blocks.retain(|text| text.trim_start().starts_with("[dependencies]"));
+    blocks
+}
+
+fn dependency_names(block: &str) -> impl Iterator<Item = &str> {
+    block
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .map(|(name, _)| name.trim())
+        .filter(|name| !name.is_empty() && !name.starts_with('['))
 }
