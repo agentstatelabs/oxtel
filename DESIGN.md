@@ -69,6 +69,8 @@ Each follows the semantic conventions.
 | `oxtel-tokio` | tokio runtime metrics: workers, queue depth and blocking pool. |
 | `oxtel-genai` | Helpers that record GenAI token usage and operation duration per the GenAI conventions, with no message content by default. |
 
+Beyond these, oxtel may recognise popular crates' own `tracing` output and record it under the conventions' names, so their telemetry becomes standard with no code change. Library output isn't a stable interface, so each mapping would be tested against the versions it supports and pass events through unchanged when they don't match. The work starts with a survey of what crates emit, and includes proposing conventional names to the crates themselves.
+
 ## 4. Architecture
 
 ```
@@ -153,7 +155,7 @@ Each follows the semantic conventions.
 
 - New instrumentation APIs. `tracing` and `metrics` are the APIs.
 - A collector. Use the OpenTelemetry Collector or a vendor build of it.
-- eBPF or zero-code instrumentation.
+- eBPF instrumentation. OpenTelemetry's OBI provides it, and it complements oxtel: it sees programs from outside, oxtel from inside. See the [guide](docs/guide.md#telemetry-without-changing-code-ebpf).
 - Profiling, until OpenTelemetry's profiles signal is stable.
 - Browser or WASM telemetry, at first.
 

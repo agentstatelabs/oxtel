@@ -159,6 +159,10 @@ Against `tracing-opentelemetry` with the official `opentelemetry_sdk` 0.33, and 
 | Log event inside a span | 523 ns | 857 ns |
 | End to end, spans exported per second | 158k | 83k |
 
+## oxtel and eBPF
+
+eBPF tools such as OpenTelemetry's [OBI](https://opentelemetry.io/docs/zero-code/obi/) trace requests from the Linux kernel, with no code changes, for every program on a machine. They see a program from the outside, where requests arrive and leave. oxtel works inside it: your spans and fields, log lines with trace ids, and the work between requests. The two complement each other. The [guide](docs/guide.md#telemetry-without-changing-code-ebpf) explains how eBPF instrumentation works and how to run both.
+
 ## How it's checked
 
 - **Against a real OpenTelemetry Collector** in CI ([`conformance/`](conformance/)). Traces, metrics and logs sent over OTLP, and metrics scraped by its Prometheus receiver, must arrive intact, exemplars included.
