@@ -155,7 +155,7 @@ Beyond these, oxtel may recognise popular crates' own `tracing` output and recor
 
 - New instrumentation APIs. `tracing` and `metrics` are the APIs.
 - A collector. Use the OpenTelemetry Collector or a vendor build of it.
-- eBPF instrumentation. OpenTelemetry's OBI provides it, and it complements oxtel: it sees programs from outside, oxtel from inside. See the [guide](docs/guide.md#telemetry-without-changing-code-ebpf).
+- eBPF instrumentation. OpenTelemetry's OBI provides it, and it complements oxtel: it sees programs from outside, oxtel from inside. See the [guide](https://agentstatelabs.github.io/oxtel/guide/ebpf/).
 - Profiling, until OpenTelemetry's profiles signal is stable.
 - Browser or WASM telemetry, at first.
 

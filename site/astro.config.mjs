@@ -60,9 +60,19 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Guide',
+					items: [
+						{ label: 'Overview', slug: 'guide' },
+						{ label: 'The words worth knowing', slug: 'guide/words' },
+						{ label: 'Recipes', slug: 'guide/recipes' },
+						{ label: "When something's wrong", slug: 'guide/troubleshooting' },
+						{ label: 'eBPF and oxtel', slug: 'guide/ebpf' },
+					],
+				},
+				{
 					label: 'More',
 					items: [
-						{ label: 'Guide', link: 'https://github.com/agentstatelabs/oxtel/blob/main/docs/guide.md' },
+						{ label: 'Every setting', link: 'https://github.com/agentstatelabs/oxtel#settings' },
 						{ label: 'API documentation', link: 'https://docs.rs/oxtel' },
 						{ label: 'Design and roadmap', link: 'https://github.com/agentstatelabs/oxtel/blob/main/DESIGN.md' },
 						{ label: 'Changelog', link: 'https://github.com/agentstatelabs/oxtel/blob/main/CHANGELOG.md' },
