@@ -32,7 +32,8 @@
 //!
 //! Helpers that should take either a client or a transaction can be generic
 //! over [`GenericClient`]. With the `deadpool-postgres` feature, [`Pool`]
-//! wraps a pool so that every client taken from it is instrumented.
+//! wraps a pool so that every client taken from it is instrumented, and
+//! records the conventions' connection pool metrics.
 
 use std::future::Future;
 use std::ops::{Deref, DerefMut};
@@ -381,7 +382,16 @@ macro_rules! calls {
 pub struct Client<C = tokio_postgres::Client> {
     inner: C,
     database: Database,
+    // Declared after `inner`, so a pooled connection is back in its pool
+    // when the lease ends.
+    _lease: Option<Lease>,
 }
+
+// A pooled client's time out of its pool.
+#[cfg(feature = "deadpool-postgres")]
+use pool::Lease;
+#[cfg(not(feature = "deadpool-postgres"))]
+type Lease = std::convert::Infallible;
 
 /// The clients a [`Client`] can wrap: tokio-postgres's own, and with the
 /// `deadpool-postgres` feature, a client taken from a deadpool pool.
@@ -415,6 +425,7 @@ impl<C: AsClient> Client<C> {
         Client {
             inner: client,
             database: database.clone(),
+            _lease: None,
         }
     }
 
@@ -423,7 +434,8 @@ impl<C: AsClient> Client<C> {
         &self.inner
     }
 
-    /// The wrapped client, without the instrumentation.
+    /// The wrapped client, without the instrumentation. For a client from
+    /// a [`Pool`], its use ends here as far as the pool's metrics go.
     pub fn into_inner(self) -> C {
         self.inner
     }
@@ -658,28 +670,186 @@ mod pool {
 
     /// A deadpool-postgres pool whose clients are instrumented. It
     /// dereferences to deadpool's [`Pool`](deadpool_postgres::Pool).
+    ///
+    /// It also records the conventions' connection pool metrics, labelled
+    /// with `db.client.connection.pool.name`:
+    ///
+    /// - `db.client.connection.count`, by `db.client.connection.state`
+    ///   (`idle` or `used`), and `db.client.connection.max`;
+    /// - `db.client.connection.pending_requests`: callers waiting for a
+    ///   connection;
+    /// - `db.client.connection.wait_time` and `db.client.connection.use_time`,
+    ///   in seconds;
+    /// - `db.client.connection.timeouts`.
+    ///
+    /// The counts are taken from the pool's status whenever a client is
+    /// taken or returned. These metrics are still in development in the
+    /// conventions, so their names may change. The counts carry no unit,
+    /// since the `metrics` facade can't express `{connection}`.
     #[derive(Clone)]
     pub struct Pool {
         inner: deadpool_postgres::Pool,
         database: Database,
+        name: Arc<str>,
     }
 
     impl Pool {
-        /// Instrument a pool whose connections are made with `config`.
+        /// Instrument a pool whose connections are made with `config`. Its
+        /// name in the pool metrics is `server.address:server.port/db.namespace`,
+        /// as the conventions suggest for a pool without one.
         pub fn new(pool: deadpool_postgres::Pool, config: &tokio_postgres::Config) -> Self {
+            describe_pool_metrics();
+            let database = Database::new(config);
+            let name = default_name(&database);
             Pool {
                 inner: pool,
-                database: Database::new(config),
+                database,
+                name: name.into(),
             }
+        }
+
+        /// Name the pool in its metrics, for a program with more than one.
+        pub fn with_name(mut self, name: impl Into<String>) -> Self {
+            self.name = name.into().into();
+            self
         }
 
         /// Take a client from the pool, instrumented.
         pub async fn get(
             &self,
         ) -> Result<Client<deadpool_postgres::Object>, deadpool_postgres::PoolError> {
-            let client = self.inner.get().await?;
-            Ok(Client::with_database(client, &self.database))
+            let waiting = Waiting::start(&self.name);
+            let started = Instant::now();
+            let result = self.inner.get().await;
+            drop(waiting);
+            metrics::histogram!(
+                "db.client.connection.wait_time",
+                POOL_NAME => self.name.to_string()
+            )
+            .record(started.elapsed().as_secs_f64());
+            if let Err(deadpool_postgres::PoolError::Timeout(_)) = &result {
+                metrics::counter!(
+                    "db.client.connection.timeouts",
+                    POOL_NAME => self.name.to_string()
+                )
+                .increment(1);
+            }
+            sample(&self.inner, &self.name);
+            let client = result?;
+            Ok(Client {
+                inner: client,
+                database: self.database.clone(),
+                _lease: Some(Lease {
+                    pool: self.inner.clone(),
+                    name: Arc::clone(&self.name),
+                    since: Instant::now(),
+                }),
+            })
         }
+    }
+
+    const POOL_NAME: &str = "db.client.connection.pool.name";
+
+    /// `server.address:server.port/db.namespace`, leaving out what isn't
+    /// known.
+    fn default_name(database: &Database) -> String {
+        let mut name = match &database.0.server {
+            Some((address, port)) => format!("{address}:{port}"),
+            None => String::new(),
+        };
+        if let Some(namespace) = &database.0.namespace {
+            name.push('/');
+            name.push_str(namespace);
+        }
+        if name.is_empty() {
+            name.push_str(POSTGRESQL);
+        }
+        name
+    }
+
+    /// Set the connection counts and the pool's size limit from its status.
+    fn sample(pool: &deadpool_postgres::Pool, name: &str) {
+        let status = pool.status();
+        let count = |state: &'static str, n: usize| {
+            metrics::gauge!(
+                "db.client.connection.count",
+                POOL_NAME => name.to_string(),
+                "db.client.connection.state" => state
+            )
+            .set(n as f64);
+        };
+        count("idle", status.available);
+        count("used", status.size.saturating_sub(status.available));
+        metrics::gauge!("db.client.connection.max", POOL_NAME => name.to_string())
+            .set(status.max_size as f64);
+    }
+
+    /// Counts a caller in `db.client.connection.pending_requests` while it
+    /// waits, so a cancelled wait is uncounted too.
+    struct Waiting(metrics::Gauge);
+
+    impl Waiting {
+        fn start(name: &str) -> Self {
+            let gauge = metrics::gauge!(
+                "db.client.connection.pending_requests",
+                POOL_NAME => name.to_string()
+            );
+            gauge.increment(1.0);
+            Waiting(gauge)
+        }
+    }
+
+    impl Drop for Waiting {
+        fn drop(&mut self) {
+            self.0.decrement(1.0);
+        }
+    }
+
+    /// A pooled client's time out of its pool, recorded when it ends.
+    pub(crate) struct Lease {
+        pool: deadpool_postgres::Pool,
+        name: Arc<str>,
+        since: Instant,
+    }
+
+    impl Drop for Lease {
+        fn drop(&mut self) {
+            metrics::histogram!(
+                "db.client.connection.use_time",
+                POOL_NAME => self.name.to_string()
+            )
+            .record(self.since.elapsed().as_secs_f64());
+            sample(&self.pool, &self.name);
+        }
+    }
+
+    fn describe_pool_metrics() {
+        metrics::describe_gauge!(
+            "db.client.connection.count",
+            "The number of connections that are currently in state described by the `state` attribute."
+        );
+        metrics::describe_gauge!(
+            "db.client.connection.max",
+            "The maximum number of open connections allowed."
+        );
+        metrics::describe_gauge!(
+            "db.client.connection.pending_requests",
+            "The number of current pending requests for an open connection."
+        );
+        metrics::describe_histogram!(
+            "db.client.connection.wait_time",
+            metrics::Unit::Seconds,
+            "The time it took to obtain an open connection from the pool."
+        );
+        metrics::describe_histogram!(
+            "db.client.connection.use_time",
+            metrics::Unit::Seconds,
+            "The time between borrowing a connection and returning it to the pool."
+        );
+        metrics::describe_counter!(
+            "db.client.connection.timeouts",
+            "The number of connection timeouts that have occurred trying to obtain a connection from the pool."
+        );
     }
 
     impl Deref for Pool {

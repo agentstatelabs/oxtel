@@ -18,6 +18,7 @@ All notable changes to oxtel are recorded here. The format follows
   - `prepare` returns a statement that keeps its text, so the calls running it are named. Preparing isn't recorded as a call of its own.
   - The wrappers dereference to tokio-postgres's types, so methods they don't wrap still work, without telemetry. `GenericClient` takes either a client or a transaction, as tokio-postgres's own sealed trait does.
   - With the `deadpool-postgres` feature, `oxtel_sql::postgres::Pool` wraps a deadpool-postgres pool so every client taken from it is instrumented, including `prepare_cached`.
+  - The pool also records the conventions' connection pool metrics, by `db.client.connection.pool.name` (`address:port/database` unless named with `with_name`): `db.client.connection.count` by state (`idle`, `used`), `db.client.connection.max`, `db.client.connection.pending_requests`, `db.client.connection.wait_time`, `db.client.connection.use_time` and `db.client.connection.timeouts`. They're still in development in the conventions, so their names may change.
 - `db.client.operation.duration` gets the bucket bounds the conventions advise for it (1 ms to 10 s) by default. `DB_SECONDS_BUCKETS` names them.
 
 ## [0.2.0] - 2026-10-10
