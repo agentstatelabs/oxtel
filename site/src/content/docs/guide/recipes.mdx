@@ -1,0 +1,58 @@
+---
+title: Recipes
+description: A few settings, or a few lines of code, for common situations, from JSON logs in a container to Elastic, hosted backends, Prometheus, web services and MCP servers.
+---
+
+import Example from '../../../components/Example.astro';
+
+Each recipe is a few settings, or a few lines of code, for one common situation.
+
+## JSON logs in a container
+
+Nothing to do: when standard error isn't a terminal, oxtel writes one JSON object per line, which every log shipper understands. To be explicit, set `OXTEL_LOG_FORMAT=json`. If your platform only collects standard output, set `OXTEL_LOG_OUTPUT=stdout`.
+
+## Elastic
+
+Either ship the log lines, or send everything over OTLP:
+
+- **Log lines:** `OXTEL_LOG_FORMAT=ecs` writes the Elastic Common Schema, which Elastic Agent and Filebeat read without any mapping.
+- **OTLP:** set `OTEL_EXPORTER_OTLP_ENDPOINT` to your deployment's OTLP endpoint, and `OTEL_EXPORTER_OTLP_HEADERS` to the authorization header it gives you, such as `Authorization=ApiKey <key>`.
+
+## A hosted backend
+
+Hosted backends give you an endpoint and a key. Set both, and name your service:
+
+```bash
+OTEL_SERVICE_NAME=shop \
+OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com \
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>" \
+  ./shop
+```
+
+The startup line shows where everything goes; it never shows the headers.
+
+## Prometheus
+
+`OTEL_METRICS_EXPORTER=prometheus` serves your metrics at `http://localhost:9464/metrics` for Prometheus to scrape. In a container, also set `OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0` so the scraper can reach it. To serve `/metrics` from your own axum router instead, see `oxtel_tower::MetricsService`.
+
+## A web service
+
+With `oxtel-tower` and its `axum` feature, one layer gives every request a span named by its route (`GET /orders/{id}`), continues the caller's trace if it sent one, logs a `request` line with the status and duration, and records `http.server.request.duration`:
+
+<Example file="examples/web.rs" region="serve" />
+
+- Call `oxtel::init()` first, so the layer finds the metrics recorder.
+- Shut down gracefully, as above. Otherwise Ctrl-C ends the process at once, before oxtel can send what's pending.
+- `.with_access_log(false)` drops the `request` lines; `RUST_LOG=info,oxtel_tower=warn` keeps only those for failed requests.
+
+[A web service](/scenarios/web-service/) has the whole program.
+
+## An MCP server
+
+Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapper. Each tool call gets a span named `tools/call {tool}`, continuing the client's trace if it sent one. Log lines go to standard error by default, which keeps them out of a stdio server's protocol stream; don't set `OXTEL_LOG_OUTPUT=stdout` for one.
+
+## Turning things off
+
+- No log lines: `OXTEL_LOG_FORMAT=none`, or `.without_local_logs()` in code.
+- Nothing at all except log lines: `OTEL_SDK_DISABLED=true`.
+- One kind of telemetry: `OTEL_TRACES_EXPORTER=none`, `OTEL_METRICS_EXPORTER=none` or `OTEL_LOGS_EXPORTER=none`.
