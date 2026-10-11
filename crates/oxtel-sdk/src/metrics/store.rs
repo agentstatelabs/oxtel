@@ -73,6 +73,11 @@ pub const SECONDS_BUCKETS: [f64; 14] = [
     0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.25, 0.5, 0.75, 1.0, 2.5, 5.0, 7.5, 10.0,
 ];
 
+/// Bucket bounds the semantic conventions advise for
+/// `db.client.operation.duration`: database calls run from about a
+/// millisecond to seconds.
+pub const DB_SECONDS_BUCKETS: [f64; 9] = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0];
+
 /// The specification's default explicit bucket bounds.
 pub const DEFAULT_BUCKETS: [f64; 15] = [
     0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0,
@@ -228,6 +233,9 @@ impl Store {
             return Arc::clone(bounds);
         }
         match unit {
+            Some("s") if name == "db.client.operation.duration" => {
+                Arc::from(DB_SECONDS_BUCKETS.as_slice())
+            }
             Some("s") => Arc::from(SECONDS_BUCKETS.as_slice()),
             _ => Arc::from(DEFAULT_BUCKETS.as_slice()),
         }

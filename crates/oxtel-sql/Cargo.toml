@@ -1,0 +1,39 @@
+[package]
+name = "oxtel-sql"
+description = "Database client spans and metrics for rusqlite, following the OpenTelemetry semantic conventions"
+readme = "../../README.md"
+keywords = ["opentelemetry", "sql", "sqlite", "tracing", "database"]
+categories = ["development-tools::debugging", "database"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[features]
+default = []
+# Spans and db.client.operation.duration for every statement a rusqlite
+# connection runs, through SQLite's own trace hooks.
+rusqlite = ["dep:rusqlite"]
+
+[dependencies]
+metrics = "0.24"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+# Any rusqlite from 0.33 on: a program links one SQLite, so cargo settles on
+# the version the program already uses. trace_v2 is the same across these.
+rusqlite = { version = ">=0.33, <0.41", default-features = false, features = ["trace"], optional = true }
+
+[dev-dependencies]
+oxtel-sdk = { path = "../oxtel-sdk" }
+oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
+rusqlite = { version = ">=0.33, <0.41", features = ["bundled", "trace"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[package.metadata.docs.rs]
+# Document the APIs behind features too.
+all-features = true
+
+[lints]
+workspace = true
