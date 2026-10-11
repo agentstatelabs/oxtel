@@ -15,6 +15,15 @@ env:
 jobs:
   check:
     runs-on: ubuntu-latest
+    # For oxtel-sql's PostgreSQL tests.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd pg_isready --health-interval 2s --health-timeout 5s --health-retries 30
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -29,8 +38,11 @@ jobs:
       - run: cargo clippy -p oxtel-rmcp --all-targets --features client
       - run: cargo test -p oxtel-rmcp --features client
       - run: cargo clippy -p oxtel-semconv --all-targets --features experimental
-      - run: cargo clippy -p oxtel-sql --all-targets --features rusqlite
-      - run: cargo test -p oxtel-sql --features rusqlite
+      - run: cargo clippy -p oxtel-sql --all-targets --all-features
+      - name: oxtel-sql against SQLite and a real PostgreSQL
+        run: cargo test -p oxtel-sql --all-features
+        env:
+          TEST_DATABASE_URL: postgres://postgres@localhost:5432/postgres
       # oxtel without its default features: local logs only.
       - run: cargo clippy -p oxtel --no-default-features --all-targets
       - run: cargo test -p oxtel --no-default-features

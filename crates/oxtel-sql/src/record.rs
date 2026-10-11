@@ -2,7 +2,7 @@
 //! `db.client.operation.duration` histogram.
 
 // The clients are features; without one, only the public pieces are used.
-#![cfg_attr(not(feature = "rusqlite"), allow(dead_code))]
+#![cfg_attr(not(any(feature = "rusqlite", feature = "postgres")), allow(dead_code))]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -49,6 +49,28 @@ pub(crate) fn analyze(sql: &str) -> Arc<Analysis> {
     analysis
 }
 
+/// Why a call failed.
+pub(crate) struct Failure<'a> {
+    /// `error.type`: the database's code for the error when it gave one,
+    /// otherwise the client library's error type.
+    pub(crate) error_type: &'a str,
+    /// `db.response.status_code`: the database's own code, such as a
+    /// PostgreSQL SQLSTATE.
+    pub(crate) status_code: Option<&'a str>,
+}
+
+#[cfg(feature = "postgres")]
+impl Failure<'_> {
+    /// Mark a call's span as failed.
+    pub(crate) fn record(&self, span: &tracing::Span) {
+        span.record("error.type", self.error_type);
+        if let Some(code) = self.status_code {
+            span.record("db.response.status_code", code);
+        }
+        span.record("otel.status_code", "error");
+    }
+}
+
 /// One call to a database.
 pub(crate) struct Call<'a> {
     /// `db.system.name`, such as `sqlite` or `postgresql`.
@@ -86,7 +108,7 @@ impl Call<'_> {
         if let Some(summary) = &self.analysis.summary {
             span.record("db.query.summary", summary.as_str());
         }
-        if QUERY_TEXT.load(Ordering::Relaxed) {
+        if QUERY_TEXT.load(Ordering::Relaxed) && !self.analysis.text.is_empty() {
             span.record("db.query.text", self.analysis.text.as_str());
         }
         if let Some((address, port)) = self.server {
@@ -96,9 +118,10 @@ impl Call<'_> {
         span
     }
 
-    /// Record `db.client.operation.duration`.
-    pub(crate) fn record_duration(&self, seconds: f64) {
-        let mut labels = Vec::with_capacity(6);
+    /// Record `db.client.operation.duration`, with why the call failed if
+    /// it did.
+    pub(crate) fn record_duration(&self, seconds: f64, failure: Option<&Failure<'_>>) {
+        let mut labels = Vec::with_capacity(8);
         labels.push(Label::new("db.system.name", self.system));
         if let Some(namespace) = self.namespace {
             labels.push(Label::new("db.namespace", namespace.to_string()));
@@ -109,6 +132,12 @@ impl Call<'_> {
         if let Some((address, port)) = self.server {
             labels.push(Label::new("server.address", address.to_string()));
             labels.push(Label::new("server.port", port.to_string()));
+        }
+        if let Some(failure) = failure {
+            labels.push(Label::new("error.type", failure.error_type.to_string()));
+            if let Some(code) = failure.status_code {
+                labels.push(Label::new("db.response.status_code", code.to_string()));
+            }
         }
         metrics::histogram!("db.client.operation.duration", labels).record(seconds);
     }

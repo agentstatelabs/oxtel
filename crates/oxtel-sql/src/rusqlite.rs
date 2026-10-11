@@ -104,7 +104,7 @@ fn on_event(event: TraceEvent<'_>) {
                 server: None,
                 analysis: &analysis,
             };
-            call.record_duration(duration.as_secs_f64());
+            call.record_duration(duration.as_secs_f64(), None);
             // Dropping the span ends it.
             drop(finished);
         }

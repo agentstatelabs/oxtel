@@ -1,8 +1,8 @@
 [package]
 name = "oxtel-sql"
-description = "Database client spans and metrics for rusqlite, following the OpenTelemetry semantic conventions"
+description = "Database client spans and metrics for rusqlite and tokio-postgres, following the OpenTelemetry semantic conventions"
 readme = "../../README.md"
-keywords = ["opentelemetry", "sql", "sqlite", "tracing", "database"]
+keywords = ["opentelemetry", "sqlite", "postgres", "tracing", "database"]
 categories = ["development-tools::debugging", "database"]
 version.workspace = true
 edition.workspace = true
@@ -17,6 +17,10 @@ default = []
 # Spans and db.client.operation.duration for every statement a rusqlite
 # connection runs, through SQLite's own trace hooks.
 rusqlite = ["dep:rusqlite"]
+# The same for tokio-postgres clients, wrapped where the connection is made.
+postgres = ["dep:tokio-postgres"]
+# The same for clients taken from a deadpool-postgres pool.
+deadpool-postgres = ["postgres", "dep:deadpool-postgres"]
 
 [dependencies]
 metrics = "0.24"
@@ -24,11 +28,16 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 # Any rusqlite from 0.33 on: a program links one SQLite, so cargo settles on
 # the version the program already uses. trace_v2 is the same across these.
 rusqlite = { version = ">=0.33, <0.41", default-features = false, features = ["trace"], optional = true }
+tokio-postgres = { version = "0.7", default-features = false, optional = true }
+deadpool-postgres = { version = "0.14", default-features = false, optional = true }
 
 [dev-dependencies]
+deadpool-postgres = "0.14"
 oxtel-sdk = { path = "../oxtel-sdk" }
 oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
 rusqlite = { version = ">=0.33, <0.41", features = ["bundled", "trace"] }
+tokio = { version = "1", features = ["macros", "rt"] }
+tokio-postgres = "0.7"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 [package.metadata.docs.rs]
