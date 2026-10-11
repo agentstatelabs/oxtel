@@ -65,7 +65,7 @@ Each follows the semantic conventions.
 | `oxtel-tower` | HTTP server and client spans and metrics for tower, axum and hyper, with context extraction and injection. |
 | `oxtel-reqwest` | HTTP client spans, with context injection. |
 | `oxtel-rmcp` | MCP server and client spans and `mcp.*.operation.duration`, per the MCP conventions. Context travels through `params._meta`. |
-| `oxtel-sql` | Database client spans and `db.client.*` metrics for rusqlite (through SQLite's own trace hooks, so call sites don't change), tokio-postgres and sqlx. Spans are named by the query summary the conventions define (`SELECT users`). The query text is recorded with every literal replaced by `?`, as the conventions advise, so values never reach telemetry; it can be turned off. |
+| `oxtel-sql` | Database client spans and `db.client.*` metrics for rusqlite (through SQLite's own trace hooks, so call sites don't change), tokio-postgres (a wrapped client, since its prepared statements don't expose their SQL) and sqlx. Spans are named by the query summary the conventions define (`SELECT users`). The query text is recorded with every literal replaced by `?`, as the conventions advise, so values never reach telemetry; it can be turned off. |
 | `oxtel-tokio` | tokio runtime metrics: workers, queue depth and blocking pool. |
 | `oxtel-genai` | Helpers that record GenAI token usage and operation duration per the GenAI conventions, with no message content by default. |
 

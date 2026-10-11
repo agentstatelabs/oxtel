@@ -10,13 +10,26 @@
 //! # }
 //! ```
 //!
-//! Every statement it runs then gets:
+//! With the `postgres` feature, one line wraps a tokio-postgres client where
+//! the connection is made, and with `deadpool-postgres`, a pool (see
+//! [`postgres`]):
+//!
+//! ```no_run
+//! # #[cfg(feature = "postgres")]
+//! # async fn run(client: tokio_postgres::Client, config: tokio_postgres::Config) {
+//! let client = oxtel_sql::postgres::Client::new(client, &config);
+//! # }
+//! ```
+//!
+//! Every statement they run then gets:
 //!
 //! - **a client span**, named by its query summary (`SELECT users`, `INSERT
 //!   orders SELECT carts`), with `db.system.name`, `db.query.summary` and
-//!   `db.query.text`;
+//!   `db.query.text`, plus `db.namespace` and the server for PostgreSQL;
 //! - **`db.client.operation.duration`**, through the `metrics` facade, by
-//!   system and query summary.
+//!   system and query summary;
+//! - for PostgreSQL, when it fails, the error's SQLSTATE as
+//!   `db.response.status_code` and `error.type`, on both.
 //!
 //! `db.query.text` is the statement with every literal replaced by `?` and
 //! comments removed, so values never reach telemetry; turn it off with
@@ -32,6 +45,8 @@
 //! [`summarize`] and [`sanitize`] are available on their own, for
 //! instrumenting a database client this crate doesn't cover.
 
+#[cfg(feature = "postgres")]
+pub mod postgres;
 mod query;
 mod record;
 #[cfg(feature = "rusqlite")]

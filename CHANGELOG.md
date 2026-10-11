@@ -12,6 +12,12 @@ All notable changes to oxtel are recorded here. The format follows
   - `db.client.operation.duration`, by system and query summary, measured by SQLite itself.
   - `db.query.text` is the statement with every literal (strings, numbers, blobs, booleans, dollar-quoted strings) replaced by `?`, comments removed, and `IN` lists of literals collapsed, so values never reach telemetry. Placeholders stay. `oxtel_sql::record_query_text(false)` leaves it off.
   - `oxtel_sql::summarize` and `oxtel_sql::sanitize` are public, for instrumenting other clients.
+- **`oxtel-sql`: PostgreSQL**, through tokio-postgres (the `postgres` feature). tokio-postgres doesn't expose a prepared statement's SQL, so the client is wrapped where the connection is made: `oxtel_sql::postgres::Client::new(client, &config)`.
+  - `query`, `query_one`, `query_opt`, `execute`, `batch_execute` and `simple_query`, on clients and transactions, are each recorded as a call: a client span named by its query summary, with `db.namespace`, `server.address` and `server.port` from the connection's configuration, and `db.client.operation.duration`. Starting, committing and rolling back a transaction, and savepoints, are calls too.
+  - A failed call records the error's SQLSTATE as `db.response.status_code` and `error.type`, on the span and the metric, and marks the span as an error.
+  - `prepare` returns a statement that keeps its text, so the calls running it are named. Preparing isn't recorded as a call of its own.
+  - The wrappers dereference to tokio-postgres's types, so methods they don't wrap still work, without telemetry. `GenericClient` takes either a client or a transaction, as tokio-postgres's own sealed trait does.
+  - With the `deadpool-postgres` feature, `oxtel_sql::postgres::Pool` wraps a deadpool-postgres pool so every client taken from it is instrumented, including `prepare_cached`.
 - `db.client.operation.duration` gets the bucket bounds the conventions advise for it (1 ms to 10 s) by default. `DB_SECONDS_BUCKETS` names them.
 
 ## [0.2.0] - 2026-10-10
