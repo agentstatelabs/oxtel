@@ -2,7 +2,15 @@
 //! `db.client.operation.duration` histogram.
 
 // The clients are features; without one, only the public pieces are used.
-#![cfg_attr(not(any(feature = "rusqlite", feature = "postgres")), allow(dead_code))]
+#![cfg_attr(
+    not(any(
+        feature = "rusqlite",
+        feature = "postgres",
+        feature = "sqlx-0.8",
+        feature = "sqlx-0.9"
+    )),
+    allow(dead_code)
+)]
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +41,14 @@ pub(crate) struct Analysis {
     pub(crate) summary: Option<String>,
     pub(crate) text: String,
 }
+
+/// What a statement whose text isn't known is recorded as: no summary, so
+/// the span is named by the database system, and no text.
+#[cfg(any(feature = "postgres", feature = "sqlx-0.8", feature = "sqlx-0.9"))]
+pub(crate) static UNKNOWN: Analysis = Analysis {
+    summary: None,
+    text: String::new(),
+};
 
 /// Distinct statement texts remembered; the cache starts over past this.
 const CACHE_LIMIT: usize = 1024;
@@ -65,7 +81,7 @@ pub(crate) struct Failure<'a> {
     pub(crate) status_code: Option<&'a str>,
 }
 
-#[cfg(feature = "postgres")]
+#[cfg(any(feature = "postgres", feature = "sqlx-0.8", feature = "sqlx-0.9"))]
 impl Failure<'_> {
     /// Mark a call's span as failed.
     pub(crate) fn record(&self, span: &tracing::Span) {
@@ -89,38 +105,10 @@ pub(crate) struct Call<'a> {
 impl Call<'_> {
     /// A client span for the call, named by its query summary, or the
     /// database system when there's none.
+    #[cfg(any(feature = "rusqlite", feature = "postgres"))]
     pub(crate) fn span(&self) -> tracing::Span {
-        let name = self.analysis.summary.as_deref().unwrap_or(self.system);
-        let span = tracing::info_span!(
-            "database call",
-            otel.name = name,
-            otel.kind = "client",
-            db.system.name = self.system,
-            db.namespace = Empty,
-            db.query.summary = Empty,
-            db.query.text = Empty,
-            server.address = Empty,
-            server.port = Empty,
-            error.type = Empty,
-            db.response.status_code = Empty,
-            otel.status_code = Empty,
-        );
-        if span.is_disabled() {
-            return span;
-        }
-        if let Some(namespace) = self.namespace {
-            span.record("db.namespace", namespace);
-        }
-        if let Some(summary) = &self.analysis.summary {
-            span.record("db.query.summary", summary.as_str());
-        }
-        if QUERY_TEXT.load(Ordering::Relaxed) && !self.analysis.text.is_empty() {
-            span.record("db.query.text", self.analysis.text.as_str());
-        }
-        if let Some((address, port)) = self.server {
-            span.record("server.address", address);
-            span.record("server.port", port);
-        }
+        let span = open_span(self.system, self.namespace, self.server);
+        describe(&span, self.analysis);
         span
     }
 
@@ -146,6 +134,56 @@ impl Call<'_> {
             }
         }
         metrics::histogram!("db.client.operation.duration", labels).record(seconds);
+    }
+}
+
+/// A client span for a call to `system`, before its statement is known:
+/// named by the system until [`describe`] names it by the statement. The
+/// target is `oxtel_sql`, which oxtel's sqlx mapping looks for so that it
+/// doesn't record a query a second time.
+pub(crate) fn open_span(
+    system: &'static str,
+    namespace: Option<&str>,
+    server: Option<(&str, u16)>,
+) -> tracing::Span {
+    let span = tracing::info_span!(
+        target: "oxtel_sql",
+        "database call",
+        otel.name = system,
+        otel.kind = "client",
+        db.system.name = system,
+        db.namespace = Empty,
+        db.query.summary = Empty,
+        db.query.text = Empty,
+        db.response.returned_rows = Empty,
+        server.address = Empty,
+        server.port = Empty,
+        error.type = Empty,
+        db.response.status_code = Empty,
+        otel.status_code = Empty,
+    );
+    if span.is_disabled() {
+        return span;
+    }
+    if let Some(namespace) = namespace {
+        span.record("db.namespace", namespace);
+    }
+    if let Some((address, port)) = server {
+        span.record("server.address", address);
+        span.record("server.port", port);
+    }
+    span
+}
+
+/// Name a call's span by its statement, and record the statement's summary
+/// and text.
+pub(crate) fn describe(span: &tracing::Span, analysis: &Analysis) {
+    if let Some(summary) = &analysis.summary {
+        span.record("otel.name", summary.as_str());
+        span.record("db.query.summary", summary.as_str());
+    }
+    if QUERY_TEXT.load(Ordering::Relaxed) && !analysis.text.is_empty() {
+        span.record("db.query.text", analysis.text.as_str());
     }
 }
 

@@ -240,7 +240,9 @@ impl EventMapping for Sqlx {
             return None;
         }
         // oxtel-sql's wrapper records this query itself.
-        if parent.is_some_and(|p| p.target() == "oxtel_sql") {
+        if parent
+            .is_some_and(|p| p.target() == "oxtel_sql" || p.target().starts_with("oxtel_sql::"))
+        {
             return None;
         }
         let mut fields = QueryFields::default();

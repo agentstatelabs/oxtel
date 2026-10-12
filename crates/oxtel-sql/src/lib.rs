@@ -12,7 +12,7 @@
 //!
 //! With the `postgres` feature, one line wraps a tokio-postgres client where
 //! the connection is made, and with `deadpool-postgres`, a pool (see
-//! [`postgres`]):
+//! `oxtel_sql::postgres`):
 //!
 //! ```no_run
 //! # #[cfg(feature = "postgres")]
@@ -42,19 +42,29 @@
 //! Prometheus. The spans' target is `oxtel_sql`, so `RUST_LOG=…,oxtel_sql=off`
 //! turns them off.
 //!
-//! For sqlx, `oxtel::init()` makes the same spans and metric from sqlx's own
-//! query events, with no code change, but without failures or which database
-//! a query went to; see `oxtel::mappings`.
+//! For sqlx, wrap the pool with the `sqlx-0.8` or `sqlx-0.9` feature:
+//! `oxtel_sql::sqlx::v0_9::Pool::new(pool)`. `oxtel::init()` also makes the
+//! same spans and metric from sqlx's own query events, with no code change,
+//! but without failures or which database a query went to; the
+//! `oxtel_sql::sqlx` module compares the two.
 //!
 //! [`summarize`] and [`sanitize`] are available on their own, for
 //! instrumenting a database client this crate doesn't cover.
 
+#[cfg(any(
+    feature = "deadpool-postgres",
+    feature = "sqlx-0.8",
+    feature = "sqlx-0.9"
+))]
+mod pool;
 #[cfg(feature = "postgres")]
 pub mod postgres;
 mod query;
 mod record;
 #[cfg(feature = "rusqlite")]
 pub mod rusqlite;
+#[cfg(any(feature = "sqlx-0.8", feature = "sqlx-0.9"))]
+pub mod sqlx;
 
 pub use query::{sanitize, summarize};
 pub use record::{describe_metrics, record_query_text, records_query_text};

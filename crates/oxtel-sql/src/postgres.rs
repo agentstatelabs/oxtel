@@ -53,13 +53,6 @@ const POSTGRESQL: &str = "postgresql";
 /// connection.
 const CLIENT_ERROR: &str = "tokio_postgres::Error";
 
-/// What a statement prepared outside this crate is recorded as: no summary,
-/// so the span is named `postgresql`, and no text.
-static UNKNOWN: Analysis = Analysis {
-    summary: None,
-    text: String::new(),
-};
-
 /// Where a client's connections go, for `db.namespace`, `server.address`
 /// and `server.port`. Cheap to clone.
 #[derive(Clone, Debug, Default)]
@@ -219,7 +212,7 @@ mod sealed {
         fn target(&self) -> Target<'_> {
             Target::Prepared(Prepared {
                 statement: self,
-                analysis: &super::UNKNOWN,
+                analysis: &crate::record::UNKNOWN,
             })
         }
     }
@@ -389,7 +382,7 @@ pub struct Client<C = tokio_postgres::Client> {
 
 // A pooled client's time out of its pool.
 #[cfg(feature = "deadpool-postgres")]
-use pool::Lease;
+use crate::pool::Lease;
 #[cfg(not(feature = "deadpool-postgres"))]
 type Lease = std::convert::Infallible;
 
@@ -698,9 +691,13 @@ mod pool {
         /// name in the pool metrics is `server.address:server.port/db.namespace`,
         /// as the conventions suggest for a pool without one.
         pub fn new(pool: deadpool_postgres::Pool, config: &tokio_postgres::Config) -> Self {
-            describe_pool_metrics();
+            crate::pool::describe_metrics();
             let database = Database::new(config);
-            let name = default_name(&database);
+            let name = crate::pool::default_name(
+                POSTGRESQL,
+                database.0.namespace.as_deref(),
+                database.0.server.as_ref().map(|(a, p)| (a.as_str(), *p)),
+            );
             Pool {
                 inner: pool,
                 database,
@@ -718,137 +715,31 @@ mod pool {
         pub async fn get(
             &self,
         ) -> Result<Client<deadpool_postgres::Object>, deadpool_postgres::PoolError> {
-            let waiting = Waiting::start(&self.name);
+            let waiting = crate::pool::Waiting::start(&self.name);
             let started = Instant::now();
             let result = self.inner.get().await;
             drop(waiting);
-            metrics::histogram!(
-                "db.client.connection.wait_time",
-                POOL_NAME => self.name.to_string()
-            )
-            .record(started.elapsed().as_secs_f64());
-            if let Err(deadpool_postgres::PoolError::Timeout(_)) = &result {
-                metrics::counter!(
-                    "db.client.connection.timeouts",
-                    POOL_NAME => self.name.to_string()
-                )
-                .increment(1);
-            }
+            let timed_out = matches!(&result, Err(deadpool_postgres::PoolError::Timeout(_)));
+            crate::pool::record_wait(&self.name, started, timed_out);
             sample(&self.inner, &self.name);
             let client = result?;
+            let (pool, name) = (self.inner.clone(), Arc::clone(&self.name));
             Ok(Client {
                 inner: client,
                 database: self.database.clone(),
-                _lease: Some(Lease {
-                    pool: self.inner.clone(),
-                    name: Arc::clone(&self.name),
-                    since: Instant::now(),
-                }),
+                _lease: Some(Lease::start(&self.name, move || sample(&pool, &name))),
             })
         }
-    }
-
-    const POOL_NAME: &str = "db.client.connection.pool.name";
-
-    /// `server.address:server.port/db.namespace`, leaving out what isn't
-    /// known.
-    fn default_name(database: &Database) -> String {
-        let mut name = match &database.0.server {
-            Some((address, port)) => format!("{address}:{port}"),
-            None => String::new(),
-        };
-        if let Some(namespace) = &database.0.namespace {
-            name.push('/');
-            name.push_str(namespace);
-        }
-        if name.is_empty() {
-            name.push_str(POSTGRESQL);
-        }
-        name
     }
 
     /// Set the connection counts and the pool's size limit from its status.
     fn sample(pool: &deadpool_postgres::Pool, name: &str) {
         let status = pool.status();
-        let count = |state: &'static str, n: usize| {
-            metrics::gauge!(
-                "db.client.connection.count",
-                POOL_NAME => name.to_string(),
-                "db.client.connection.state" => state
-            )
-            .set(n as f64);
-        };
-        count("idle", status.available);
-        count("used", status.size.saturating_sub(status.available));
-        metrics::gauge!("db.client.connection.max", POOL_NAME => name.to_string())
-            .set(status.max_size as f64);
-    }
-
-    /// Counts a caller in `db.client.connection.pending_requests` while it
-    /// waits, so a cancelled wait is uncounted too.
-    struct Waiting(metrics::Gauge);
-
-    impl Waiting {
-        fn start(name: &str) -> Self {
-            let gauge = metrics::gauge!(
-                "db.client.connection.pending_requests",
-                POOL_NAME => name.to_string()
-            );
-            gauge.increment(1.0);
-            Waiting(gauge)
-        }
-    }
-
-    impl Drop for Waiting {
-        fn drop(&mut self) {
-            self.0.decrement(1.0);
-        }
-    }
-
-    /// A pooled client's time out of its pool, recorded when it ends.
-    pub(crate) struct Lease {
-        pool: deadpool_postgres::Pool,
-        name: Arc<str>,
-        since: Instant,
-    }
-
-    impl Drop for Lease {
-        fn drop(&mut self) {
-            metrics::histogram!(
-                "db.client.connection.use_time",
-                POOL_NAME => self.name.to_string()
-            )
-            .record(self.since.elapsed().as_secs_f64());
-            sample(&self.pool, &self.name);
-        }
-    }
-
-    fn describe_pool_metrics() {
-        metrics::describe_gauge!(
-            "db.client.connection.count",
-            "The number of connections that are currently in state described by the `state` attribute."
-        );
-        metrics::describe_gauge!(
-            "db.client.connection.max",
-            "The maximum number of open connections allowed."
-        );
-        metrics::describe_gauge!(
-            "db.client.connection.pending_requests",
-            "The number of current pending requests for an open connection."
-        );
-        metrics::describe_histogram!(
-            "db.client.connection.wait_time",
-            metrics::Unit::Seconds,
-            "The time it took to obtain an open connection from the pool."
-        );
-        metrics::describe_histogram!(
-            "db.client.connection.use_time",
-            metrics::Unit::Seconds,
-            "The time between borrowing a connection and returning it to the pool."
-        );
-        metrics::describe_counter!(
-            "db.client.connection.timeouts",
-            "The number of connection timeouts that have occurred trying to obtain a connection from the pool."
+        crate::pool::record_counts(
+            name,
+            status.available,
+            status.size.saturating_sub(status.available),
+            status.max_size,
         );
     }
 

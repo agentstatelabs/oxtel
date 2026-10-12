@@ -38,6 +38,8 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [dev-dependencies]
 log = "0.4.34"
+# The sqlx mapping and oxtel-sql's sqlx wrapper together.
+oxtel-sql = { path = "../oxtel-sql", features = ["sqlx-0.8", "sqlx-0.9"] }
 # The sqlx mapping is checked against each sqlx it supports.
 sqlx08 = { package = "sqlx", version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres"] }
 sqlx09 = { package = "sqlx", version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
