@@ -18,8 +18,8 @@ default = []
 axum = ["dep:axum"]
 
 [dependencies]
-oxtel-sdk = { path = "../oxtel-sdk", version = "0.2.0", features = ["http"] }
-oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.2.0" }
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.3.0", features = ["http"] }
+oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.3.0" }
 axum = { version = "0.8", default-features = false, features = ["matched-path"], optional = true }
 http = "1.4"
 metrics = "0.24"

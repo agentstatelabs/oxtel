@@ -6,19 +6,14 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-12
+
+Databases. A new crate, `oxtel-sql`, gives every query a span named for what it does (`SELECT users`) and a `db.client.operation.duration` measurement, under the semantic conventions' names, with the query's text recorded and its values left out: SQLite in one line, PostgreSQL through tokio-postgres or a deadpool pool, and sqlx 0.8 and 0.9 by wrapping the pool, with failures, their error codes and connection pool metrics where the client reports them. And with no code change at all, `oxtel::init()` now records sqlx's queries from the events sqlx already writes: oxtel's first mapping from a library's own logs to conventional telemetry. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) says which to use.
+
+Coming from 0.2, only the version number changes. The new sqlx mapping acts only on sqlx's own events; `OXTEL_MAPPINGS=none` turns it off.
+
 ### Added
-- **Database spans from sqlx, with no code change.** sqlx writes an event as each query finishes; `oxtel::init()` now turns it into a database client span, a child of the span the query ran in and as long as sqlx measured, and `db.client.operation.duration`. The span is named by the query summary and carries `db.query.text` (literals replaced by `?`) and `db.response.returned_rows`. This is oxtel's first mapping: telemetry under the conventions' names from what a library already logs (the `mappings` feature, on by default; `OXTEL_MAPPINGS=none` or `Builder::without_mappings` leaves it out).
-  - What sqlx's event doesn't carry, the span can't have: a failed query isn't marked as an error, and `db.system.name` is `other_sql` unless the database is named with `Builder::with_mapping(oxtel::mappings::Sqlx::new().with_system(…))`. The event is only written while sqlx's statement logging is on, as it is by default. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) compares this with wrapping sqlx's pool.
-  - sqlx's events reach the trace layer alone, not local or exported logs, and the bridge from the `log` crate keeps the level your filters set.
-  - Tested against sqlx 0.8 and 0.9 on PostgreSQL. An event of another shape is left alone rather than recorded wrong, and a query oxtel-sql's wrapper records isn't counted again.
-- **`oxtel-sql`: sqlx 0.8 and 0.9, by wrapping the pool** (the `sqlx-0.8` and `sqlx-0.9` features): `oxtel_sql::sqlx::v0_9::Pool::new(pool)`, and `v0_8` likewise. Queries run on `&pool`, on `&mut tx` from its `begin`, or on `&mut conn` from its `acquire` each get a client span named by the query summary, with `db.system.name`, `db.namespace` and the server from the pool's connection options, `db.query.text` and `db.response.returned_rows`, and `db.client.operation.duration`, from when the query starts on its connection.
-  - A failed query records the database's error code (a SQLSTATE for PostgreSQL and MySQL) as `db.response.status_code` and `error.type`, or sqlx's error kind, such as `sqlx::Error::PoolTimedOut`, and marks its span as an error. `BEGIN`, `COMMIT` and `ROLLBACK` are calls too.
-  - The pool records the connection pool metrics, as the deadpool wrapper does. A connection sqlx is still returning to the pool counts as idle.
-  - This is what sqlx's own events can't say. Queries through the wrapper aren't recorded again by oxtel's sqlx mapping: oxtel-sql's spans now have the target `oxtel_sql` exactly, which the mapping looks for, as it now also looks for `oxtel_sql::…`.
-  - With sqlx 0.9 it needs sqlx's `macros` feature (on by default), because sqlx 0.9's executors have `describe` only then, and the wrapper implements it.
-- `oxtel-sdk`: `EventMapping` and `TracerProviderBuilder::with_event_mapping`, to record a library's events as spans after the fact, back-dated by how long the operation took and sampled like any other span.
-- `oxtel_sql::records_query_text`, for instrumentation outside oxtel-sql that follows its setting.
-- **`oxtel-sql`: database client spans and metrics**, starting with SQLite. `oxtel_sql::rusqlite::instrument(&conn)` (the `rusqlite` feature) uses SQLite's own trace hooks, so call sites don't change. Any rusqlite from 0.33 to 0.40 works.
+- **`oxtel-sql`, a new crate: database client spans and metrics.** For SQLite, `oxtel_sql::rusqlite::instrument(&conn)` (the `rusqlite` feature) uses SQLite's own trace hooks, so call sites don't change. Any rusqlite from 0.33 to 0.40 works.
   - Every statement gets a client span named by its query summary, as the database conventions define it (`SELECT users`, `INSERT shipping_details SELECT orders`), with `db.system.name`, `db.query.summary` and `db.query.text`. Statements run inside another span are its children.
   - `db.client.operation.duration`, by system and query summary, measured by SQLite itself.
   - `db.query.text` is the statement with every literal (strings, numbers, blobs, booleans, dollar-quoted strings) replaced by `?`, comments removed, and `IN` lists of literals collapsed, so values never reach telemetry. Placeholders stay. `oxtel_sql::record_query_text(false)` leaves it off.
@@ -30,6 +25,17 @@ All notable changes to oxtel are recorded here. The format follows
   - The wrappers dereference to tokio-postgres's types, so methods they don't wrap still work, without telemetry. `GenericClient` takes either a client or a transaction, as tokio-postgres's own sealed trait does.
   - With the `deadpool-postgres` feature, `oxtel_sql::postgres::Pool` wraps a deadpool-postgres pool so every client taken from it is instrumented, including `prepare_cached`.
   - The pool also records the conventions' connection pool metrics, by `db.client.connection.pool.name` (`address:port/database` unless named with `with_name`): `db.client.connection.count` by state (`idle`, `used`), `db.client.connection.max`, `db.client.connection.pending_requests`, `db.client.connection.wait_time`, `db.client.connection.use_time` and `db.client.connection.timeouts`. They're still in development in the conventions, so their names may change.
+- **`oxtel-sql`: sqlx 0.8 and 0.9, by wrapping the pool** (the `sqlx-0.8` and `sqlx-0.9` features): `oxtel_sql::sqlx::v0_9::Pool::new(pool)`, and `v0_8` likewise. Queries run on `&pool`, on `&mut tx` from its `begin`, or on `&mut conn` from its `acquire` each get a client span named by the query summary, with `db.system.name`, `db.namespace` and the server from the pool's connection options, `db.query.text` and `db.response.returned_rows`, and `db.client.operation.duration`, from when the query starts on its connection.
+  - A failed query records the database's error code (a SQLSTATE for PostgreSQL and MySQL) as `db.response.status_code` and `error.type`, or sqlx's error kind, such as `sqlx::Error::PoolTimedOut`, and marks its span as an error. `BEGIN`, `COMMIT` and `ROLLBACK` are calls too.
+  - The pool records the connection pool metrics, as the deadpool wrapper does. A connection sqlx is still returning to the pool counts as idle.
+  - This is what sqlx's own events can't say. Queries through the wrapper aren't recorded again by oxtel's sqlx mapping: oxtel-sql's spans now have the target `oxtel_sql` exactly, which the mapping looks for, as it now also looks for `oxtel_sql::…`.
+  - With sqlx 0.9 it needs sqlx's `macros` feature (on by default), because sqlx 0.9's executors have `describe` only then, and the wrapper implements it.
+- **Database spans from sqlx, with no code change.** sqlx writes an event as each query finishes; `oxtel::init()` now turns it into a database client span, a child of the span the query ran in and as long as sqlx measured, and `db.client.operation.duration`. The span is named by the query summary and carries `db.query.text` (literals replaced by `?`) and `db.response.returned_rows`. This is oxtel's first mapping: telemetry under the conventions' names from what a library already logs (the `mappings` feature, on by default; `OXTEL_MAPPINGS=none` or `Builder::without_mappings` leaves it out).
+  - What sqlx's event doesn't carry, the span can't have: a failed query isn't marked as an error, and `db.system.name` is `other_sql` unless the database is named with `Builder::with_mapping(oxtel::mappings::Sqlx::new().with_system(…))`. The event is only written while sqlx's statement logging is on, as it is by default. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) compares this with wrapping sqlx's pool.
+  - sqlx's events reach the trace layer alone, not local or exported logs, and the bridge from the `log` crate keeps the level your filters set.
+  - Tested against sqlx 0.8 and 0.9 on PostgreSQL. An event of another shape is left alone rather than recorded wrong, and a query oxtel-sql's wrapper records isn't counted again.
+- `oxtel-sdk`: `EventMapping` and `TracerProviderBuilder::with_event_mapping`, to record a library's events as spans after the fact, back-dated by how long the operation took and sampled like any other span.
+- `oxtel_sql::records_query_text`, for instrumentation outside oxtel-sql that follows its setting.
 - `db.client.operation.duration` gets the bucket bounds the conventions advise for it (1 ms to 10 s) by default. `DB_SECONDS_BUCKETS` names them.
 
 ## [0.2.0] - 2026-10-10
@@ -207,6 +213,7 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/agentstatelabs/oxtel/releases/tag/v0.1.0

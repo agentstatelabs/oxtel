@@ -4,7 +4,7 @@ OpenTelemetry-compatible telemetry for Rust, native to [`tracing`](https://docs.
 
 Structured logs with one line of setup, and OpenTelemetry traces, metrics and logs when you want them, without changing your code. Rust code already records spans, logs and metrics with `tracing` and `metrics`; oxtel turns that into JSON or text log lines, OTLP for collectors and backends, and Prometheus/OpenMetrics for scrapes. You don't add a second instrumentation API, and there's no bridge between two.
 
-> **Status: 0.2, early.** Traces, logs and metrics work end to end, and are tested against a real OpenTelemetry Collector. The API will change before 1.0; see [What works today](#what-works-today) and the [roadmap](DESIGN.md#6-plan).
+> **Status: 0.3, early.** Traces, logs and metrics work end to end, and are tested against a real OpenTelemetry Collector. The API will change before 1.0; see [What works today](#what-works-today) and the [roadmap](DESIGN.md#6-plan).
 
 ## Get started
 
@@ -14,7 +14,7 @@ You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the 
 
 ```toml
 [dependencies]
-oxtel = "0.2"
+oxtel = "0.3"
 tracing = "0.1"
 ```
 
@@ -51,7 +51,7 @@ tracing::warn!(attempt = 2, "payment provider slow; retrying");
 // {..., "message":"payment provider slow; retrying","trace_id":"a98f5438…","span_id":"86faebde…","order.id":7,"attempt":2}
 ```
 
-For a web service, add `oxtel-tower = { version = "0.2", features = ["axum"] }`. One line on an axum router gives every request a span, a log line, and duration metrics:
+For a web service, add `oxtel-tower = { version = "0.3", features = ["axum"] }`. One line on an axum router gives every request a span, a log line, and duration metrics:
 
 ```rust
 let app = Router::new()

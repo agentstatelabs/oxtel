@@ -25,11 +25,11 @@ log = ["dep:tracing-log"]
 mappings = ["dep:oxtel-sql"]
 
 [dependencies]
-oxtel-sdk = { path = "../oxtel-sdk", version = "0.2.0" }
-oxtel-otlp = { path = "../oxtel-otlp", version = "0.2.0", optional = true }
-oxtel-config = { path = "../oxtel-config", version = "0.2.0", optional = true }
-oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.2.0" }
-oxtel-sql = { path = "../oxtel-sql", version = "0.2.0", optional = true }
+oxtel-sdk = { path = "../oxtel-sdk", version = "0.3.0" }
+oxtel-otlp = { path = "../oxtel-otlp", version = "0.3.0", optional = true }
+oxtel-config = { path = "../oxtel-config", version = "0.3.0", optional = true }
+oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.3.0" }
+oxtel-sql = { path = "../oxtel-sql", version = "0.3.0", optional = true }
 metrics = "0.24"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }

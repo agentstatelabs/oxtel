@@ -3,9 +3,7 @@ title: Databases
 description: Spans and duration metrics for every query, from SQLite, PostgreSQL and sqlx, and how to choose between sqlx's two options.
 ---
 
-:::note
-Database telemetry arrives with oxtel 0.3, which isn't released yet: the `oxtel-sql` crate, including its sqlx wrapper, and sqlx's automatic spans in `oxtel::init()`. Until then, they're on the repository's main branch.
-:::
+Database telemetry is new in oxtel 0.3: the `oxtel-sql` crate, and sqlx's automatic spans in `oxtel::init()`.
 
 Every query can get a span, named for what it does (`SELECT users`, `INSERT orders`), and a `db.client.operation.duration` measurement. Spans sit inside the span of the request that made the query, so a trace shows which queries a request ran and how long each took.
 
