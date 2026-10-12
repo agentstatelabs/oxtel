@@ -12,8 +12,9 @@ use oxtel_sdk::resource::Detector;
 use oxtel_sdk::trace::{Sampler, TracerProvider, TracerProviderBuilder};
 use oxtel_sdk::{KeyValue, Resource};
 use tracing::Dispatch;
+use tracing_core::LevelFilter;
 use tracing_subscriber::filter::Targets;
-use tracing_subscriber::layer::{Layer, SubscriberExt};
+use tracing_subscriber::layer::{Filter, Layer, SubscriberExt};
 use tracing_subscriber::registry::Registry;
 
 use crate::config::{EnvConfig, Local, LocalEnv, LogOutput};
@@ -51,6 +52,10 @@ pub struct Builder {
     local_output: LogOutput,
     local_filter: Option<String>,
     local_writer: Option<Box<dyn Write + Send>>,
+    #[cfg(feature = "mappings")]
+    mappings: Vec<std::sync::Arc<dyn oxtel_sdk::trace::EventMapping>>,
+    #[cfg(feature = "mappings")]
+    built_in_mappings: bool,
 }
 
 impl Default for Builder {
@@ -75,6 +80,10 @@ impl Default for Builder {
             local_output: LogOutput::Stderr,
             local_filter: None,
             local_writer: None,
+            #[cfg(feature = "mappings")]
+            mappings: Vec::new(),
+            #[cfg(feature = "mappings")]
+            built_in_mappings: true,
         }
     }
 }
@@ -163,6 +172,25 @@ impl Builder {
         hook: impl FnOnce(MeterProviderBuilder) -> MeterProviderBuilder + 'static,
     ) -> Self {
         self.metric_hooks.push(Box::new(hook));
+        self
+    }
+
+    /// Record a library's events as conventional spans and metrics (see
+    /// [`mappings`](crate::mappings)), trying this before the built-in
+    /// mappings: for example the sqlx mapping, told which database it's
+    /// about.
+    #[cfg(feature = "mappings")]
+    pub fn with_mapping(mut self, mapping: impl oxtel_sdk::trace::EventMapping) -> Self {
+        self.mappings.push(std::sync::Arc::new(mapping));
+        self
+    }
+
+    /// Leave out the built-in [`mappings`](crate::mappings), as
+    /// `OXTEL_MAPPINGS=none` does. Mappings added with
+    /// [`with_mapping`](Builder::with_mapping) still apply.
+    #[cfg(feature = "mappings")]
+    pub fn without_mappings(mut self) -> Self {
+        self.built_in_mappings = false;
         self
     }
 
@@ -324,6 +352,7 @@ impl Builder {
             &mut warnings,
         );
         if disabled {
+            let log_level = log_level(&[&local_directives], &self.layers);
             let mut layers: Vec<BoxedLayer> = Vec::new();
             layers.extend(local(local_directives.clone(), local_directives));
             layers.extend(self.layers);
@@ -340,11 +369,38 @@ impl Builder {
                 },
                 warnings,
                 trace_context: false,
+                log_level,
             });
         }
 
         let traces_directives = directives("traces", self.traces_filter, &mut warnings);
         let logs_directives = directives("logs", self.logs_filter, &mut warnings);
+        // Before mappings open their libraries' events to the trace layer:
+        // that shouldn't send every `log` record through the bridge.
+        let log_level = log_level(
+            &[&local_directives, &logs_directives, &traces_directives],
+            &self.layers,
+        );
+        #[cfg(feature = "mappings")]
+        let mappings = {
+            let mut mappings = self.mappings;
+            if self.built_in_mappings && mappings_from_env(&mut warnings) {
+                mappings.extend(crate::mappings::built_in());
+            }
+            mappings
+        };
+        // The trace layer's filter, letting through the events the mappings
+        // read unless the directives name their targets.
+        #[allow(unused_mut)]
+        let mut trace_layer_directives = traces_directives.clone();
+        #[cfg(feature = "mappings")]
+        for mapping in &mappings {
+            for &(target, level) in mapping.targets() {
+                if !traces_directives.iter().any(|(t, _)| t == target) {
+                    trace_layer_directives = trace_layer_directives.with_target(target, level);
+                }
+            }
+        }
 
         let dests = |procs: &[Proc], kind, hooks: bool| {
             let mut dests: Vec<Dest> = procs.iter().map(|p| Dest::of_proc(p, kind)).collect();
@@ -402,6 +458,10 @@ impl Builder {
                 Proc::Simple(sink) => b.with_simple_exporter(sink),
             };
         }
+        #[cfg(feature = "mappings")]
+        for mapping in mappings {
+            b = b.with_event_mapping(mapping);
+        }
         for hook in self.trace_hooks {
             b = hook(b);
         }
@@ -455,12 +515,8 @@ impl Builder {
             ));
         }
 
-        let mut layers: Vec<BoxedLayer> = vec![
-            traces
-                .layer()
-                .with_filter(traces_directives.clone())
-                .boxed(),
-        ];
+        let mut layers: Vec<BoxedLayer> =
+            vec![traces.layer().with_filter(trace_layer_directives).boxed()];
         if let Some(logs) = &logs {
             layers.push(
                 logs.layer()
@@ -486,6 +542,7 @@ impl Builder {
             },
             warnings,
             trace_context,
+            log_level,
         })
     }
 }
@@ -543,6 +600,42 @@ fn directives(signal: &str, explicit: Option<String>, warnings: &mut Vec<String>
     })
 }
 
+/// The most verbose level any of `directives` or `layers` enables: the
+/// level the bridge from the `log` crate forwards.
+#[cfg_attr(not(feature = "log"), allow(dead_code))]
+fn log_level(directives: &[&Targets], layers: &[BoxedLayer]) -> LevelFilter {
+    let from_directives = directives
+        .iter()
+        .filter_map(|t| <Targets as Filter<Registry>>::max_level_hint(t));
+    // A layer without a hint may want anything.
+    let from_layers = layers
+        .iter()
+        .map(|l| l.max_level_hint().unwrap_or(LevelFilter::TRACE));
+    from_directives
+        .chain(from_layers)
+        .max()
+        .unwrap_or(LevelFilter::OFF)
+}
+
+/// Whether `OXTEL_MAPPINGS` leaves the built-in mappings on: `all` (the
+/// default) or `none`.
+#[cfg(feature = "mappings")]
+fn mappings_from_env(warnings: &mut Vec<String>) -> bool {
+    match std::env::var("OXTEL_MAPPINGS") {
+        Err(_) => true,
+        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
+            "" | "all" => true,
+            "none" => false,
+            other => {
+                warnings.push(format!(
+                    "OXTEL_MAPPINGS={other:?} isn't `all` or `none`; using `all`"
+                ));
+                true
+            }
+        },
+    }
+}
+
 /// Pipelines built but not yet installed. See [`Builder::build`].
 pub struct Telemetry {
     dispatch: Dispatch,
@@ -550,6 +643,8 @@ pub struct Telemetry {
     guard: Guard,
     warnings: Vec<String>,
     trace_context: bool,
+    #[cfg_attr(not(feature = "log"), allow(dead_code))]
+    log_level: LevelFilter,
 }
 
 impl Telemetry {
@@ -597,7 +692,7 @@ impl Telemetry {
         }
         #[cfg(feature = "log")]
         {
-            let level = match tracing_core::LevelFilter::current().into_level() {
+            let level = match self.log_level.into_level() {
                 Some(tracing::Level::TRACE) => tracing_log::log::LevelFilter::Trace,
                 Some(tracing::Level::DEBUG) => tracing_log::log::LevelFilter::Debug,
                 Some(tracing::Level::INFO) => tracing_log::log::LevelFilter::Info,
@@ -652,3 +747,41 @@ impl fmt::Display for Error {
 }
 
 impl std::error::Error for Error {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn targets(directives: &str) -> Targets {
+        directives.parse().unwrap()
+    }
+
+    #[test]
+    fn the_log_bridge_forwards_what_the_directives_ask_for() {
+        let info = targets("info");
+        let mixed = targets("warn,my_app=debug");
+        assert_eq!(log_level(&[&info], &[]), LevelFilter::INFO);
+        assert_eq!(log_level(&[&info, &mixed], &[]), LevelFilter::DEBUG);
+        // A layer of the program's own, without a hint, may want anything.
+        let layer: BoxedLayer = tracing_subscriber::fmt::layer().boxed();
+        assert_eq!(log_level(&[&info], &[layer]), LevelFilter::TRACE);
+    }
+
+    #[cfg(feature = "mappings")]
+    #[test]
+    fn mappings_open_their_targets_to_the_trace_layer_only() {
+        // `build` works the bridge's level out before a mapping adds
+        // `sqlx::query=debug` to the trace layer's directives, so a program
+        // at `info` doesn't forward every `log::debug!` record.
+        let traces = targets("info");
+        let level = log_level(&[&traces], &[]);
+        let opened = traces
+            .clone()
+            .with_target("sqlx::query", tracing::Level::DEBUG);
+        assert_eq!(level, LevelFilter::INFO);
+        assert_eq!(
+            <Targets as Filter<Registry>>::max_level_hint(&opened),
+            Some(LevelFilter::DEBUG)
+        );
+    }
+}

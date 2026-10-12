@@ -22,6 +22,12 @@ pub fn record_query_text(enabled: bool) {
     QUERY_TEXT.store(enabled, Ordering::Relaxed);
 }
 
+/// Whether `db.query.text` is recorded; see [`record_query_text`]. For
+/// instrumentation outside this crate that follows the same setting.
+pub fn records_query_text() -> bool {
+    QUERY_TEXT.load(Ordering::Relaxed)
+}
+
 /// What a statement's text says, worked out once per distinct text.
 pub(crate) struct Analysis {
     pub(crate) summary: Option<String>,

@@ -42,6 +42,10 @@
 //! Prometheus. The spans' target is `oxtel_sql`, so `RUST_LOG=…,oxtel_sql=off`
 //! turns them off.
 //!
+//! For sqlx, `oxtel::init()` makes the same spans and metric from sqlx's own
+//! query events, with no code change, but without failures or which database
+//! a query went to; see `oxtel::mappings`.
+//!
 //! [`summarize`] and [`sanitize`] are available on their own, for
 //! instrumenting a database client this crate doesn't cover.
 
@@ -53,4 +57,4 @@ mod record;
 pub mod rusqlite;
 
 pub use query::{sanitize, summarize};
-pub use record::{describe_metrics, record_query_text};
+pub use record::{describe_metrics, record_query_text, records_query_text};

@@ -13,19 +13,23 @@ homepage.workspace = true
 authors.workspace = true
 
 [features]
-default = ["otlp", "log", "config"]
+default = ["otlp", "log", "config", "mappings"]
 # Read a declarative configuration file named by OTEL_CONFIG_FILE.
 config = ["dep:oxtel-config"]
 # OTLP over HTTP: an HTTP client with rustls, and gzip.
 otlp = ["dep:oxtel-otlp"]
 # Forward records from the `log` crate into `tracing`, and so into oxtel.
 log = ["dep:tracing-log"]
+# Spans and metrics, under the conventions' names, from what libraries
+# already report through `tracing`, such as sqlx's query events.
+mappings = ["dep:oxtel-sql"]
 
 [dependencies]
 oxtel-sdk = { path = "../oxtel-sdk", version = "0.2.0" }
 oxtel-otlp = { path = "../oxtel-otlp", version = "0.2.0", optional = true }
 oxtel-config = { path = "../oxtel-config", version = "0.2.0", optional = true }
 oxtel-prometheus = { path = "../oxtel-prometheus", version = "0.2.0" }
+oxtel-sql = { path = "../oxtel-sql", version = "0.2.0", optional = true }
 metrics = "0.24"
 tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 tracing-core = { version = "0.1.36", default-features = false, features = ["std"] }
@@ -33,6 +37,11 @@ tracing-log = { version = "0.2", default-features = false, features = ["log-trac
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 [dev-dependencies]
+log = "0.4.34"
+# The sqlx mapping is checked against each sqlx it supports.
+sqlx08 = { package = "sqlx", version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres"] }
+sqlx09 = { package = "sqlx", version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres"] }
+tokio = { version = "1", features = ["macros", "rt"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
 
 [lints]

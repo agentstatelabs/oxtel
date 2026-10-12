@@ -16,6 +16,7 @@ use tracing_subscriber::registry::{LookupSpan, Registry};
 use crate::context::{SpanContext, TraceFlags};
 use crate::id::{SpanId, TraceId};
 use crate::trace::data::{Event, Link, Scope, SpanData, SpanKind, Status};
+use crate::trace::mapping::{EventMapping, MappedSpan};
 use crate::trace::processor::SpanProcessor;
 use crate::trace::sampler::Sampler;
 use crate::value::{KeyValue, Value, int_value, upsert};
@@ -68,6 +69,7 @@ pub(crate) struct Shared {
     pub(crate) sampler: Sampler,
     pub(crate) limits: SpanLimits,
     pub(crate) span_events: bool,
+    pub(crate) mappings: Vec<Arc<dyn EventMapping>>,
 }
 
 /// A [`Layer`] that records `tracing` spans as OpenTelemetry spans and hands
@@ -387,6 +389,56 @@ where
         .map(|s| s.context.clone())
 }
 
+impl TraceLayer {
+    /// Record a span an [`EventMapping`] made, ending now.
+    fn record_mapped(&self, mapped: MappedSpan, parent: Option<SpanContext>) {
+        let parent = parent.filter(SpanContext::is_valid);
+        let trace_id = parent.as_ref().map_or_else(TraceId::random, |p| p.trace_id);
+        if !self.shared.sampler.should_sample(parent.as_ref(), trace_id) {
+            return;
+        }
+        let flags = parent
+            .as_ref()
+            .map_or(TraceFlags::RANDOM, |p| p.flags)
+            .with_sampled(true);
+        let context = SpanContext {
+            trace_id,
+            span_id: SpanId::random(),
+            flags,
+            trace_state: parent
+                .as_ref()
+                .map(|p| p.trace_state.clone())
+                .unwrap_or_default(),
+            is_remote: false,
+        };
+        let end = SystemTime::now();
+        let mut attributes = mapped.attributes;
+        let limit = self.shared.limits.max_attributes;
+        let dropped_attributes = attributes.len().saturating_sub(limit) as u32;
+        attributes.truncate(limit);
+        self.shared.processor.on_end(SpanData {
+            context,
+            parent_span_id: parent.as_ref().map(|p| p.span_id),
+            parent_is_remote: parent.as_ref().is_some_and(|p| p.is_remote),
+            name: mapped.name,
+            kind: mapped.kind,
+            start_time: end.checked_sub(mapped.duration).unwrap_or(end),
+            end_time: end,
+            attributes,
+            dropped_attributes,
+            events: Vec::new(),
+            dropped_events: 0,
+            links: Vec::new(),
+            dropped_links: 0,
+            status: mapped.status,
+            scope: Scope {
+                name: mapped.scope,
+                version: None,
+            },
+        });
+    }
+}
+
 impl<S> Layer<S> for TraceLayer
 where
     S: Subscriber + for<'a> LookupSpan<'a>,
@@ -476,7 +528,28 @@ where
     }
 
     fn on_event(&self, event: &TracingEvent<'_>, ctx: Context<'_, S>) {
-        if !self.shared.span_events || crate::is_suppressed() {
+        if crate::is_suppressed() {
+            return;
+        }
+        if !self.shared.mappings.is_empty() {
+            let span = ctx.event_span(event);
+            let metadata = span.as_ref().map(|s| s.metadata());
+            if let Some(mapped) = self
+                .shared
+                .mappings
+                .iter()
+                .find_map(|m| m.map(event, metadata))
+            {
+                // The nearest span this layer records is the parent.
+                let parent = span.and_then(|s| {
+                    s.scope()
+                        .find_map(|s| s.extensions().get::<SpanState>().map(|s| s.context.clone()))
+                });
+                self.record_mapped(mapped, parent);
+                return;
+            }
+        }
+        if !self.shared.span_events {
             return;
         }
         let Some(span) = ctx.event_span(event) else {
