@@ -1,6 +1,6 @@
 # oxtel: OpenTelemetry-compatible telemetry for Rust, native to `tracing` and `metrics`
 
-_Written 2026-10-08. Phases 0 and 1 are built; 0.1 and 0.2 were released on 2026-10-10._
+_Written 2026-10-08. Phases 0 and 1 are built, and Phase 2 has begun; 0.1 and 0.2 were released on 2026-10-10, and 0.3 on 2026-10-12._
 
 ## 1. Why
 

@@ -10,7 +10,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = "0.2"
+//! oxtel = "0.3"
 //! tracing = "0.1"
 //! ```
 //!
@@ -21,7 +21,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = { version = "0.2", default-features = false }
+//! oxtel = { version = "0.3", default-features = false }
 //! tracing = "0.1"
 //! ```
 
