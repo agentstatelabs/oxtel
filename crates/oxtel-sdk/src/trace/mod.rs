@@ -18,6 +18,7 @@
 mod data;
 mod export;
 pub(crate) mod layer;
+mod mapping;
 mod processor;
 mod provider;
 mod sampler;
@@ -29,6 +30,7 @@ pub use layer::{
     RemoteParentGuard, SpanLimits, TraceLayer, attach_remote_parent, current_span_context,
     span_context,
 };
+pub use mapping::{EventMapping, MappedSpan};
 pub use processor::{BatchSpanProcessor, NoopSpanProcessor, SimpleSpanProcessor, SpanProcessor};
 pub use provider::{TracerProvider, TracerProviderBuilder};
 pub use sampler::Sampler;

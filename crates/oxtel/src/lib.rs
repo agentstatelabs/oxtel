@@ -57,6 +57,11 @@
 //!   otherwise, for log shippers. `OXTEL_LOG_FORMAT` (`auto`, `text`,
 //!   `json`, `ecs` or `none`) and `OXTEL_LOG_OUTPUT` (`stderr` or `stdout`)
 //!   change that; so do [`Builder::with_local_logs`] and its neighbours.
+//! - Libraries that already log what they do get spans and metrics under
+//!   the conventions' names from it, with the `mappings` feature (on by
+//!   default): a database span for each of sqlx's queries, for one. See
+//!   [`mappings`] for what they can and can't record; `OXTEL_MAPPINGS=none`
+//!   leaves them out.
 //! - Settings oxtel can't honour, such as `OTEL_TRACES_EXPORTER=zipkin`, are
 //!   logged as warnings with the target `oxtel`, rather than failing.
 //!
@@ -70,6 +75,8 @@ mod builder;
 mod config;
 mod filter;
 mod guard;
+#[cfg(feature = "mappings")]
+pub mod mappings;
 mod plan;
 pub mod propagation;
 mod summary;

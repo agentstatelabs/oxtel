@@ -65,6 +65,7 @@ export default defineConfig({
 						{ label: 'Overview', slug: 'guide' },
 						{ label: 'The words worth knowing', slug: 'guide/words' },
 						{ label: 'Recipes', slug: 'guide/recipes' },
+						{ label: 'Databases', slug: 'guide/databases' },
 						{ label: "When something's wrong", slug: 'guide/troubleshooting' },
 						{ label: 'eBPF and oxtel', slug: 'guide/ebpf' },
 					],

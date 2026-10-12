@@ -7,6 +7,7 @@ use crate::resource::Resource;
 use crate::trace::data::SpanData;
 use crate::trace::export::SpanExporter;
 use crate::trace::layer::{Shared, SpanLimits, TraceLayer};
+use crate::trace::mapping::EventMapping;
 use crate::trace::processor::{
     BatchSpanProcessor, NoopSpanProcessor, SimpleSpanProcessor, SpanProcessor,
 };
@@ -65,6 +66,7 @@ pub struct TracerProviderBuilder {
     limits: Option<SpanLimits>,
     span_events: bool,
     processors: Vec<ProcessorChoice>,
+    mappings: Vec<Arc<dyn EventMapping>>,
 }
 
 impl Default for TracerProviderBuilder {
@@ -75,6 +77,7 @@ impl Default for TracerProviderBuilder {
             limits: None,
             span_events: true,
             processors: Vec::new(),
+            mappings: Vec::new(),
         }
     }
 }
@@ -135,6 +138,14 @@ impl TracerProviderBuilder {
         self
     }
 
+    /// Record a library's events as spans, after the fact; see
+    /// [`EventMapping`]. Mappings are tried in the order they're added, and
+    /// the first that recognises an event makes its span.
+    pub fn with_event_mapping(mut self, mapping: impl EventMapping) -> Self {
+        self.mappings.push(Arc::new(mapping));
+        self
+    }
+
     /// Use your own processor. It receives spans with no resource attached;
     /// give it one yourself.
     pub fn with_processor(mut self, processor: impl SpanProcessor) -> Self {
@@ -168,6 +179,7 @@ impl TracerProviderBuilder {
                 sampler: self.sampler.unwrap_or_else(Sampler::from_env),
                 limits: self.limits.unwrap_or_else(SpanLimits::from_env),
                 span_events: self.span_events,
+                mappings: self.mappings,
             }),
         }
     }

@@ -7,6 +7,12 @@ All notable changes to oxtel are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- **Database spans from sqlx, with no code change.** sqlx writes an event as each query finishes; `oxtel::init()` now turns it into a database client span, a child of the span the query ran in and as long as sqlx measured, and `db.client.operation.duration`. The span is named by the query summary and carries `db.query.text` (literals replaced by `?`) and `db.response.returned_rows`. This is oxtel's first mapping: telemetry under the conventions' names from what a library already logs (the `mappings` feature, on by default; `OXTEL_MAPPINGS=none` or `Builder::without_mappings` leaves it out).
+  - What sqlx's event doesn't carry, the span can't have: a failed query isn't marked as an error, and `db.system.name` is `other_sql` unless the database is named with `Builder::with_mapping(oxtel::mappings::Sqlx::new().with_system(…))`. The event is only written while sqlx's statement logging is on, as it is by default. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) compares this with wrapping sqlx's pool.
+  - sqlx's events reach the trace layer alone, not local or exported logs, and the bridge from the `log` crate keeps the level your filters set.
+  - Tested against sqlx 0.8 and 0.9 on PostgreSQL. An event of another shape is left alone rather than recorded wrong, and a query oxtel-sql's wrapper records isn't counted again.
+- `oxtel-sdk`: `EventMapping` and `TracerProviderBuilder::with_event_mapping`, to record a library's events as spans after the fact, back-dated by how long the operation took and sampled like any other span.
+- `oxtel_sql::records_query_text`, for instrumentation outside oxtel-sql that follows its setting.
 - **`oxtel-sql`: database client spans and metrics**, starting with SQLite. `oxtel_sql::rusqlite::instrument(&conn)` (the `rusqlite` feature) uses SQLite's own trace hooks, so call sites don't change. Any rusqlite from 0.33 to 0.40 works.
   - Every statement gets a client span named by its query summary, as the database conventions define it (`SELECT users`, `INSERT shipping_details SELECT orders`), with `db.system.name`, `db.query.summary` and `db.query.text`. Statements run inside another span are its children.
   - `db.client.operation.duration`, by system and query summary, measured by SQLite itself.
