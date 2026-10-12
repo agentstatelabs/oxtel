@@ -52,9 +52,10 @@ fn named<'a>(spans: &'a [SpanData], name: &str) -> Vec<&'a SpanData> {
 }
 
 macro_rules! against {
-    ($module:ident, $sqlx:ident) => {
+    ($module:ident, $sqlx:ident, $wrapper:ident) => {
         mod $module {
             use super::*;
+            use oxtel_sql::sqlx::$wrapper;
             use sqlx::ConnectOptions as _;
             use tracing::Instrument as _;
             use $sqlx as sqlx;
@@ -158,6 +159,33 @@ macro_rules! against {
             }
 
             #[tokio::test]
+            async fn a_query_through_oxtel_sqls_wrapper_is_recorded_once() {
+                let Some(url) = database_url() else { return };
+                let h = harness();
+                let _dispatch = tracing::dispatcher::set_default(h.telemetry.dispatch());
+                let _metrics = metrics::set_default_local_recorder(h.telemetry.recorder().unwrap());
+                let pool = $wrapper::Pool::new(pool(options(&url)).await);
+                sqlx::query("SELECT 1 AS one")
+                    .fetch_all(&pool)
+                    .await
+                    .unwrap();
+                pool.close().await;
+
+                let spans = h.spans.finished_spans();
+                let selects = named(&spans, "SELECT");
+                assert_eq!(
+                    selects.len(),
+                    1,
+                    "the wrapper's span, not the mapping's too"
+                );
+                assert_eq!(
+                    attr(selects[0], "db.system.name"),
+                    Some(Value::from("postgresql")),
+                    "the wrapper knows the database"
+                );
+            }
+
+            #[tokio::test]
             async fn nothing_is_recorded_when_sqlx_logs_no_statements() {
                 let Some(url) = database_url() else { return };
                 let h = harness();
@@ -171,5 +199,5 @@ macro_rules! against {
     };
 }
 
-against!(sqlx_0_8, sqlx08);
-against!(sqlx_0_9, sqlx09);
+against!(sqlx_0_8, sqlx08, v0_8);
+against!(sqlx_0_9, sqlx09, v0_9);

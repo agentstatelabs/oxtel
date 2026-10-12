@@ -1,6 +1,6 @@
 [package]
 name = "oxtel-sql"
-description = "Database client spans and metrics for rusqlite and tokio-postgres, following the OpenTelemetry semantic conventions"
+description = "Database client spans and metrics for rusqlite, tokio-postgres and sqlx, following the OpenTelemetry semantic conventions"
 readme = "../../README.md"
 keywords = ["opentelemetry", "sqlite", "postgres", "tracing", "database"]
 categories = ["development-tools::debugging", "database"]
@@ -21,6 +21,10 @@ rusqlite = ["dep:rusqlite"]
 postgres = ["dep:tokio-postgres"]
 # The same for clients taken from a deadpool-postgres pool.
 deadpool-postgres = ["postgres", "dep:deadpool-postgres"]
+# The same for sqlx 0.8 or 0.9, by wrapping its pool: everything sqlx's own
+# query events don't say, such as failures and which database.
+"sqlx-0.8" = ["dep:sqlx-0_8", "dep:async-stream", "dep:futures-core", "dep:futures-util"]
+"sqlx-0.9" = ["dep:sqlx-0_9", "dep:async-stream", "dep:futures-core", "dep:futures-util"]
 
 [dependencies]
 metrics = "0.24"
@@ -30,12 +34,21 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 rusqlite = { version = ">=0.33, <0.41", default-features = false, features = ["trace"], optional = true }
 tokio-postgres = { version = "0.7", default-features = false, optional = true }
 deadpool-postgres = { version = "0.14", default-features = false, optional = true }
+sqlx-0_8 = { package = "sqlx", version = "0.8", default-features = false, optional = true }
+# sqlx 0.9's executors have `describe` only with `macros` (through `offline`,
+# in sqlx-core and its drivers together), and the wrappers implement it.
+sqlx-0_9 = { package = "sqlx", version = "0.9", default-features = false, features = ["macros"], optional = true }
+async-stream = { version = "0.3", optional = true }
+futures-core = { version = "0.3", default-features = false, optional = true }
+futures-util = { version = "0.3", default-features = false, optional = true }
 
 [dev-dependencies]
 deadpool-postgres = "0.14"
 oxtel-sdk = { path = "../oxtel-sdk" }
 oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
 rusqlite = { version = ">=0.33, <0.41", features = ["bundled", "trace"] }
+sqlx-0_8 = { package = "sqlx", version = "0.8.6", default-features = false, features = ["runtime-tokio", "postgres"] }
+sqlx-0_9 = { package = "sqlx", version = "0.9.0", default-features = false, features = ["runtime-tokio", "postgres", "macros"] }
 tokio = { version = "1", features = ["macros", "rt"] }
 tokio-postgres = "0.7"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
