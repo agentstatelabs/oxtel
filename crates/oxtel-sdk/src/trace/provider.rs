@@ -21,7 +21,9 @@ pub struct TracerProvider {
 }
 
 impl TracerProvider {
-    /// A builder. Without an exporter, spans get ids but go nowhere.
+    /// A builder. Without an exporter or processor, spans get ids, for log
+    /// records and propagation, but nothing else: their names, fields and
+    /// events aren't recorded, since nothing would read them.
     pub fn builder() -> TracerProviderBuilder {
         TracerProviderBuilder::default()
     }
@@ -168,6 +170,7 @@ impl TracerProviderBuilder {
                 }
             })
             .collect();
+        let records = !processors.is_empty();
         let processor: Arc<dyn SpanProcessor> = match processors.len() {
             0 => Arc::new(NoopSpanProcessor),
             1 => processors.remove(0),
@@ -176,6 +179,7 @@ impl TracerProviderBuilder {
         TracerProvider {
             shared: Arc::new(Shared {
                 processor,
+                records,
                 sampler: self.sampler.unwrap_or_else(Sampler::from_env),
                 limits: self.limits.unwrap_or_else(SpanLimits::from_env),
                 span_events: self.span_events,

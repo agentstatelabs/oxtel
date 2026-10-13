@@ -66,6 +66,9 @@ impl SpanLimits {
 
 pub(crate) struct Shared {
     pub(crate) processor: Arc<dyn SpanProcessor>,
+    /// Whether a processor takes finished spans. Without one, spans keep
+    /// their ids, for log records and propagation, and record nothing else.
+    pub(crate) records: bool,
     pub(crate) sampler: Sampler,
     pub(crate) limits: SpanLimits,
     pub(crate) span_events: bool,
@@ -477,7 +480,7 @@ where
                 .unwrap_or_default(),
             is_remote: false,
         };
-        let recording = sampled.then(|| {
+        let recording = (sampled && self.shared.records).then(|| {
             let mut recording = Box::new(Recording::new(attrs.metadata()));
             attrs.record(&mut SpanFields {
                 recording: &mut recording,

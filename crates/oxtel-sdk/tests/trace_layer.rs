@@ -169,6 +169,30 @@ fn unsampled_spans_keep_ids_but_export_nothing() {
     assert!(exporter.finished_spans().is_empty());
 }
 
+/// With no exporter there's nothing to record a span for, but log records
+/// and propagation still need its ids and its sampling decision.
+#[test]
+fn without_an_exporter_spans_keep_ids_and_their_sampling_decision() {
+    let provider = TracerProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_sampler(Sampler::AlwaysOn)
+        .build();
+    let (outer, inner) = with_layer(&provider, || {
+        let span = tracing::info_span!("unexported", field = 1);
+        span.record("field", 2);
+        let outer = span_context(&span).expect("a context without an exporter");
+        let inner = span.in_scope(|| {
+            tracing::info!("an event inside");
+            tracing::info_span!("child").in_scope(current_span_context)
+        });
+        (outer, inner.expect("child context"))
+    });
+    assert!(outer.is_valid() && outer.is_sampled());
+    assert_eq!(inner.trace_id, outer.trace_id);
+    assert!(inner.is_sampled());
+    assert_eq!(provider.stats().exported, 0);
+}
+
 #[test]
 fn a_remote_parent_joins_the_callers_trace_and_follows_its_decision() {
     let (provider, exporter) = provider(Sampler::default());
