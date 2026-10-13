@@ -6,6 +6,9 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Changed
+- **Spans cost less when nothing exports them.** A `TracerProvider` with no exporter or processor used to record every sampled span's name, fields and events, then drop them when the span closed. Now such spans get their ids and sampling decision, which log records, propagation and anything reading `current_span_context` use, and record nothing else. In AgentStateGraph's overhead benchmark, that recording was about 5% of a local request's time, with telemetry on and nothing exported.
+
 ## [0.3.0] - 2026-10-12
 
 Databases. A new crate, `oxtel-sql`, gives every query a span named for what it does (`SELECT users`) and a `db.client.operation.duration` measurement, under the semantic conventions' names, with the query's text recorded and its values left out: SQLite in one line, PostgreSQL through tokio-postgres or a deadpool pool, and sqlx 0.8 and 0.9 by wrapping the pool, with failures, their error codes and connection pool metrics where the client reports them. And with no code change at all, `oxtel::init()` now records sqlx's queries from the events sqlx already writes: oxtel's first mapping from a library's own logs to conventional telemetry. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) says which to use.
