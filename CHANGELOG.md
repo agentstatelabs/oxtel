@@ -6,6 +6,10 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-13
+
+Spans cost less when nothing exports them. Coming from 0.3.0, nothing else changes.
+
 ### Changed
 - **Spans cost less when nothing exports them.** A `TracerProvider` with no exporter or processor used to record every sampled span's name, fields and events, then drop them when the span closed. Now such spans get their ids and sampling decision, which log records, propagation and anything reading `current_span_context` use, and record nothing else. In AgentStateGraph's overhead benchmark, that recording was about 5% of a local request's time, with telemetry on and nothing exported.
 
@@ -216,7 +220,8 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/agentstatelabs/oxtel/releases/tag/v0.1.0
