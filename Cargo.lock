@@ -1697,7 +1697,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "log",
  "metrics",
@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-config"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "yaml-rust2",
 ]
@@ -1774,7 +1774,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-otlp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fastrand",
  "flate2",
@@ -1789,7 +1789,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-prometheus"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "metrics",
  "oxtel-sdk",
@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-rmcp"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "http",
  "metrics",
@@ -1815,7 +1815,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-sdk"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fastrand",
  "http",
@@ -1832,11 +1832,11 @@ dependencies = [
 
 [[package]]
 name = "oxtel-semconv"
-version = "0.3.0"
+version = "0.3.1"
 
 [[package]]
 name = "oxtel-sql"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-stream",
  "deadpool-postgres",
@@ -1856,7 +1856,7 @@ dependencies = [
 
 [[package]]
 name = "oxtel-tower"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "axum",
  "http",
