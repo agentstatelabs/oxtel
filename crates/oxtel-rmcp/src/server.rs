@@ -355,6 +355,9 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
             ClientNotification::InitializedNotification(n) => n.method.as_str().to_string(),
             ClientNotification::RootsListChangedNotification(n) => n.method.as_str().to_string(),
             ClientNotification::CustomNotification(n) => n.method.clone(),
+            // Non-exhaustive since rmcp 3: a notification added in a later
+            // rmcp release is recorded as _OTHER until oxtel learns its name.
+            _ => "_OTHER".to_string(),
         };
         let peer_version = context
             .peer

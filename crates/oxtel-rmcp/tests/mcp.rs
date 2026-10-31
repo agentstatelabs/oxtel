@@ -6,7 +6,10 @@ use oxtel_sdk::Resource;
 use oxtel_sdk::metrics::{MeterProvider, MetricFamily, PointValue};
 use oxtel_sdk::trace::{InMemorySpanExporter, Sampler, SpanData, SpanKind, Status, TracerProvider};
 use oxtel_sdk::{SpanId, TraceId, Value};
-use rmcp::model::{CallToolRequestParams, CallToolResult, Content, ErrorData, Meta};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
+    RequestMetaObject,
+};
 use rmcp::service::{RequestContext, RoleClient, RoleServer, RunningService};
 use rmcp::{ServerHandler, ServiceExt};
 use tracing_subscriber::layer::SubscriberExt;
@@ -19,10 +22,10 @@ impl ServerHandler for Tools {
         &self,
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         match request.name.as_ref() {
-            "echo" => Ok(CallToolResult::success(vec![Content::text("hello")])),
-            "broken" => Ok(CallToolResult::error(vec![Content::text("disk full")])),
+            "echo" => Ok(CallToolResult::success(vec![ContentBlock::text("hello")]).into()),
+            "broken" => Ok(CallToolResult::error(vec![ContentBlock::text("disk full")]).into()),
             "crash" => Err(ErrorData::internal_error("store unavailable", None)),
             _ => Err(ErrorData::invalid_params("no such tool", None)),
         }
@@ -99,11 +102,9 @@ async fn tool_calls_become_server_spans_that_continue_the_callers_trace() {
     let (client, server) = connect(Instrumented::new(Tools).with_transport("pipe")).await;
     let (trace_id, span_id) = (TraceId::random(), SpanId::random());
     let mut params = call("echo");
-    let mut meta = Meta::new();
-    meta.0.insert(
-        "traceparent".into(),
-        format!("00-{trace_id}-{span_id}-01").into(),
-    );
+    let mut meta = RequestMetaObject::new();
+    meta.0
+        .set_traceparent(format!("00-{trace_id}-{span_id}-01"));
     params.meta = Some(meta);
     client.call_tool(params).await.unwrap();
     client.cancel().await.unwrap();
