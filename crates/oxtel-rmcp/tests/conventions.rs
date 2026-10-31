@@ -8,7 +8,9 @@ use oxtel_sdk::Resource;
 use oxtel_sdk::metrics::{MeterProvider, MetricKind};
 use oxtel_sdk::trace::{InMemorySpanExporter, Sampler, TracerProvider};
 use oxtel_semconv::{Instrument, attribute, genai};
-use rmcp::model::{CallToolRequestParams, CallToolResult, Content, ErrorData};
+use rmcp::model::{
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ErrorData,
+};
 use rmcp::service::{RequestContext, RoleServer};
 use rmcp::{ServerHandler, ServiceExt};
 use tracing_subscriber::layer::SubscriberExt;
@@ -20,10 +22,10 @@ impl ServerHandler for Tools {
         &self,
         request: CallToolRequestParams,
         _: RequestContext<RoleServer>,
-    ) -> Result<CallToolResult, ErrorData> {
+    ) -> Result<CallToolResponse, ErrorData> {
         match request.name.as_ref() {
-            "echo" => Ok(CallToolResult::success(vec![Content::text("hi")])),
-            "broken" => Ok(CallToolResult::error(vec![Content::text("no")])),
+            "echo" => Ok(CallToolResult::success(vec![ContentBlock::text("hi")]).into()),
+            "broken" => Ok(CallToolResult::error(vec![ContentBlock::text("no")]).into()),
             _ => Err(ErrorData::internal_error("down", None)),
         }
     }
