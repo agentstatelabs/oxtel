@@ -170,8 +170,8 @@ Many crates already report what they do through `tracing`, under names of their 
 
 ## 9. Open questions
 
-1. **The name.**
+1. **The name.** *Decided 2026-10-29:* it stays oxtel.
 2. **The MSRV.** Probably the latest stable release minus two.
 3. **Events inside spans.** *Decided in Phase 1:* each event becomes a log record that carries the span's context, the OpenTelemetry direction. Span events stay available for backends that need them. The `oxtel` facade turns them off when it sets up a log pipeline, and leaves them on when there is none, so events aren't lost.
-4. **The metrics API.** Is the `metrics` facade enough, or do we need an optional typed API for instruments it can't express, such as observable callbacks and units on every record?
-5. **OpAMP.** Write our own client, or build on New Relic's `newrelic-opamp-rs` (small and active)?
+4. **The metrics API.** Is the `metrics` facade enough, or do we need an optional typed API for instruments it can't express, such as observable callbacks and units on every record? *Decided 2026-10-29:* the facade only, with no typed API of oxtel's own. It's revisited only if delta temporality or exponential histograms need something the facade can't express.
+5. **OpAMP.** Write our own client, or build on New Relic's `newrelic-opamp-rs` (small and active)? *Decided 2026-10-29:* our own client, `oxtel-opamp`.
