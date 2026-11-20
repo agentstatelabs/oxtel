@@ -8,6 +8,7 @@ All notable changes to oxtel are recorded here. The format follows
 
 ### Changed
 - **`oxtel-rmcp` now requires rmcp 3.** It moves from rmcp 1.6+ to 3.5+, because it wraps rmcp's own server and client types and so must use the same major version as your program. Upgrade rmcp to 3 together with oxtel-rmcp; programs still on rmcp 1 should stay on oxtel-rmcp 0.3 until then. A client notification that rmcp adds after 3.5 is recorded with `mcp.method.name` set to `_OTHER` until oxtel knows its name.
+- **The startup line names pull metrics plainly.** With `with_pull_metrics`, it now says metrics are `kept for the program to serve, e.g. at /metrics`, instead of `the program's own setup`, which it keeps for the program's own hooks.
 
 ## [0.3.1] - 2026-10-13
 

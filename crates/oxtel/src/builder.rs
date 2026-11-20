@@ -418,8 +418,11 @@ impl Builder {
                 Reader::Prometheus { .. } => None,
             })
             .collect();
-        if !self.metric_hooks.is_empty() || self.pull_metrics {
+        if !self.metric_hooks.is_empty() {
             summary.metrics.push(Dest::Program);
+        }
+        if self.pull_metrics {
+            summary.metrics.push(Dest::Pull);
         }
 
         let logs = (!log_processors.is_empty() || !self.log_hooks.is_empty()).then(|| {
