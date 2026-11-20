@@ -145,9 +145,11 @@ impl MeterProviderBuilder {
         self
     }
 
-    /// Bucket bounds for the histogram `name`. Without this, histograms in
-    /// seconds use the semantic conventions' duration buckets, and others
-    /// the specification's defaults.
+    /// Bucket bounds for the histogram `name`. Without this, histograms the
+    /// conventions advise buckets for get those: in seconds, the general
+    /// duration buckets, or the database or GenAI ones for those metrics,
+    /// and GenAI token counts powers of four. Others get the
+    /// specification's defaults.
     pub fn with_histogram_buckets(mut self, name: impl Into<String>, bounds: &[f64]) -> Self {
         let mut bounds: Vec<f64> = bounds.iter().copied().filter(|b| !b.is_nan()).collect();
         bounds.sort_by(f64::total_cmp);

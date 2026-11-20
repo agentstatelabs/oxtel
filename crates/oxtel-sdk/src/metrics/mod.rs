@@ -36,7 +36,7 @@ pub use export::{InMemoryMetricExporter, MetricExporter};
 pub use provider::{MeterProvider, MeterProviderBuilder};
 pub use reader::PeriodicReaderConfig;
 pub use store::{
-    DB_SECONDS_BUCKETS, DEFAULT_BUCKETS, ExemplarFilter, MetricsRecorder, OVERFLOW_ATTRIBUTE,
-    SECONDS_BUCKETS,
+    DB_SECONDS_BUCKETS, DEFAULT_BUCKETS, ExemplarFilter, GENAI_SECONDS_BUCKETS,
+    GENAI_TOKEN_BUCKETS, MetricsRecorder, OVERFLOW_ATTRIBUTE, SECONDS_BUCKETS,
 };
 pub use units::ucum;

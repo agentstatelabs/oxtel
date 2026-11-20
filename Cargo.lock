@@ -1815,6 +1815,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxtel-genai"
+version = "0.3.1"
+dependencies = [
+ "metrics",
+ "oxtel-sdk",
+ "oxtel-semconv",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "oxtel-otlp"
 version = "0.3.1"
 dependencies = [
