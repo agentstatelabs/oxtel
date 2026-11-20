@@ -1,0 +1,9 @@
+2026-11-20T21:07:34.411293Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-20T21:07:34.411465Z  INFO job{job.id=1 job.kind=resize}: worker: started trace_id=73220e51b60cdff18592c122765555a1 span_id=9c6ec98e79e6b031
+2026-11-20T21:07:34.433151Z  INFO job{job.id=1 job.kind=resize}: worker: done trace_id=73220e51b60cdff18592c122765555a1 span_id=9c6ec98e79e6b031
+2026-11-20T21:07:34.433221Z  INFO job{job.id=2 job.kind=resize}: worker: started trace_id=90f31a0decdaa8e95d4e7932f91f549f span_id=a0fd6bec251a2775
+2026-11-20T21:07:34.454311Z  INFO job{job.id=2 job.kind=resize}: worker: done trace_id=90f31a0decdaa8e95d4e7932f91f549f span_id=a0fd6bec251a2775
+2026-11-20T21:07:34.454374Z  INFO job{job.id=3 job.kind=transcode}: worker: started trace_id=e559a532eae06a9284264a2d4d697375 span_id=4f39130d6db0b234
+2026-11-20T21:07:34.474731Z  WARN job{job.id=3 job.kind=transcode}: worker: failed error="no encoder for this format" trace_id=e559a532eae06a9284264a2d4d697375 span_id=4f39130d6db0b234
+2026-11-20T21:07:34.474786Z  INFO job{job.id=4 job.kind=resize}: worker: started trace_id=8b168b952e38acbc350512514581ec2c span_id=34a4812d823e2105
+2026-11-20T21:07:34.496846Z  INFO job{job.id=4 job.kind=resize}: worker: done trace_id=8b168b952e38acbc350512514581ec2c span_id=34a4812d823e2105

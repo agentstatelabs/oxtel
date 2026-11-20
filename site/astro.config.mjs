@@ -57,6 +57,12 @@ export default defineConfig({
 					items: [
 						{ label: 'Structured logs only', slug: 'scenarios/logs' },
 						{ label: 'A web service', slug: 'scenarios/web-service' },
+						{ label: 'A command-line tool', slug: 'scenarios/cli' },
+						{ label: 'A background worker', slug: 'scenarios/worker' },
+						{ label: 'Database access', slug: 'scenarios/database' },
+						{ label: 'Prometheus scraping only', slug: 'scenarios/prometheus' },
+						{ label: 'A library crate', slug: 'scenarios/library' },
+						{ label: 'Testing your telemetry', slug: 'scenarios/testing' },
 					],
 				},
 				{

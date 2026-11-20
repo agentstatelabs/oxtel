@@ -1,0 +1,61 @@
+---
+title: A library crate
+description: A library instrumented with tracing and metrics alone, with no oxtel dependency, and an application that decides where its telemetry goes.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+A library shouldn't decide where telemetry goes: the application that uses it does. So a library depends on `tracing` and `metrics`, which only record, and on nothing from oxtel. Whatever the application sets up receives the library's spans, log lines and metrics: oxtel, or anything else built on the same two crates. If the application sets up nothing, they cost next to nothing.
+
+Here the library is `shipping`, which quotes the price of sending a parcel, and the application asks it for three quotes.
+
+## The library
+
+It depends on these, and nothing else:
+
+<Example file="examples/shipping/Cargo.toml" region="dependencies" />
+
+<Example file="examples/shipping/src/lib.rs" />
+
+## The application
+
+It depends on oxtel and the library, and on `tracing` for log lines of its own:
+
+<Example file="examples/library.rs" doc="toml" />
+
+<Example file="examples/library.rs" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/library.rs" doc="bash" />
+
+## What it prints
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/library.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/library.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+The library's warning carries its target, `shipping`, and its span, `quote`, with the call's arguments and a trace id. The application's lines carry its own target, `library`. The library's `debug` line appears only when the application asks for it, as the second command above does. CI runs the example and checks it still prints these lines.
+
+## Writing the library
+
+- **Depend on `tracing` and `metrics` only.** Don't call `oxtel::init()`, or install a subscriber or a recorder: a program can have only one of each, and choosing it is the application's job.
+- **A span for each operation a caller would want to see,** at `info`, and details at `debug` or `trace`. Every line has the crate's name as its target, so an application can turn the library up or down on its own: `RUST_LOG=info,shipping=debug`, or `shipping=off`.
+- **Return errors rather than logging them.** The caller decides whether a failure matters, and logs it if it does. This library logs only what its caller couldn't see otherwise: the surcharge.
+- **Name metrics after the library,** such as `shipping.quotes` rather than `quotes`, and keep their attribute values few.
+- **Describe metrics after the application has set up.** `metrics::describe_counter!` and its neighbours reach only a recorder that's already installed. A library can offer a function for the application to call after `oxtel::init()`.
+- **Test the telemetry** with oxtel-sdk as a dev-dependency, as in [Testing your telemetry](/scenarios/testing/). A dev-dependency doesn't reach the library's users.
+
+## In OpenTelemetry terms
+
+The library's spans and metrics arrive with the instrumentation scope `shipping`, the crate their target starts with, so a backend can tell them apart from the application's. In a Prometheus scrape, that's the `otel_scope_name` label.
+
+Where the OpenTelemetry conventions name an attribute, such as `http.request.method` or `db.system.name`, use their name, so backends understand it. `oxtel-semconv` has every name as a constant, but a library that wants no oxtel dependency at all can write the names as strings.

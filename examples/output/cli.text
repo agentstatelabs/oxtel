@@ -1,0 +1,2 @@
+2026-11-20T21:07:30.066414Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-20T21:07:30.066522Z  INFO primes{up_to=100}: cli: done found=25 trace_id=0c58d2ffe31317bb642d87586ed592aa span_id=e87e150d19256bdb

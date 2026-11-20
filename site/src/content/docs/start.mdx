@@ -3,7 +3,7 @@ title: Get started
 description: From nothing to structured logs, then to traces and metrics in a backend, in three steps.
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { CardGrid, LinkCard, Steps } from '@astrojs/starlight/components';
 import Example from '../../components/Example.astro';
 
 You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the rest when you want it.
@@ -41,3 +41,18 @@ You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the 
    Nothing is sent anywhere until you set an endpoint. When oxtel starts, it logs one line saying what it set up, and if sending fails, it says so and what to check. [When something's wrong](/guide/troubleshooting/) goes through the usual causes.
 
 </Steps>
+
+## Next
+
+Each scenario is a complete program for one kind of project, with its dependencies and how to run it. Start from the one closest to yours.
+
+<CardGrid>
+	<LinkCard title="Structured logs only" description="JSON log lines and nothing else, without a single HTTP or TLS crate." href="/scenarios/logs/" />
+	<LinkCard title="A web service" description="An axum service where every request gets a span, a log line and duration metrics." href="/scenarios/web-service/" />
+	<LinkCard title="A command-line tool" description="Results on standard output, log lines on standard error, and nothing lost on exit." href="/scenarios/cli/" />
+	<LinkCard title="A background worker" description="A span for each job, carried onto the task that runs it, and each job counted and timed." href="/scenarios/worker/" />
+	<LinkCard title="Database access" description="Every SQLite statement as a span named for what it does, without the values." href="/scenarios/database/" />
+	<LinkCard title="Prometheus scraping only" description="Metrics at /metrics for Prometheus, with no collector and no HTTP or TLS crates." href="/scenarios/prometheus/" />
+	<LinkCard title="A library crate" description="Instrumented with tracing and metrics alone, leaving the choice to the application." href="/scenarios/library/" />
+	<LinkCard title="Testing your telemetry" description="Unit tests that check the spans and metrics a function records." href="/scenarios/testing/" />
+</CardGrid>

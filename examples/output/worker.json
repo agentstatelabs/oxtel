@@ -1,0 +1,9 @@
+{"timestamp":"2026-11-20T21:07:34.023206Z","level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)"}
+{"timestamp":"2026-11-20T21:07:34.023361Z","level":"INFO","target":"worker","message":"started","trace_id":"b685e8367755fb99bac001cc771fb074","span_id":"efebf55b5e3f9936","job.id":1,"job.kind":"resize"}
+{"timestamp":"2026-11-20T21:07:34.045485Z","level":"INFO","target":"worker","message":"done","trace_id":"b685e8367755fb99bac001cc771fb074","span_id":"efebf55b5e3f9936","job.id":1,"job.kind":"resize"}
+{"timestamp":"2026-11-20T21:07:34.045553Z","level":"INFO","target":"worker","message":"started","trace_id":"9de12a939a1aa32683a5ae73a4663fcb","span_id":"7c94dd1c2ea27874","job.id":2,"job.kind":"resize"}
+{"timestamp":"2026-11-20T21:07:34.066699Z","level":"INFO","target":"worker","message":"done","trace_id":"9de12a939a1aa32683a5ae73a4663fcb","span_id":"7c94dd1c2ea27874","job.id":2,"job.kind":"resize"}
+{"timestamp":"2026-11-20T21:07:34.066823Z","level":"INFO","target":"worker","message":"started","trace_id":"579eeb766be8edcb1dec9db611a17503","span_id":"ea1952c382b3f7c2","job.id":3,"job.kind":"transcode"}
+{"timestamp":"2026-11-20T21:07:34.087906Z","level":"WARN","target":"worker","message":"failed","trace_id":"579eeb766be8edcb1dec9db611a17503","span_id":"ea1952c382b3f7c2","job.id":3,"job.kind":"transcode","error":"no encoder for this format"}
+{"timestamp":"2026-11-20T21:07:34.087968Z","level":"INFO","target":"worker","message":"started","trace_id":"02966f44711fea6a9a1f9bcdff35a700","span_id":"af9299489ac0b8db","job.id":4,"job.kind":"resize"}
+{"timestamp":"2026-11-20T21:07:34.109458Z","level":"INFO","target":"worker","message":"done","trace_id":"02966f44711fea6a9a1f9bcdff35a700","span_id":"af9299489ac0b8db","job.id":4,"job.kind":"resize"}

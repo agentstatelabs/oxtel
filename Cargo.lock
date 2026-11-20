@@ -1808,7 +1808,10 @@ dependencies = [
  "oxtel-otlp",
  "oxtel-prometheus",
  "oxtel-sdk",
+ "oxtel-sql",
  "oxtel-tower",
+ "rusqlite",
+ "shipping",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -2773,6 +2776,14 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f40ca3c46823713e0d4209592e8d6e826aa57e928f09752619fc696c499637f6"
 dependencies = [
  "lazy_static",
+]
+
+[[package]]
+name = "shipping"
+version = "0.0.0"
+dependencies = [
+ "metrics",
+ "tracing",
 ]
 
 [[package]]

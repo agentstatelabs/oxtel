@@ -1,0 +1,76 @@
+---
+title: Database access
+description: Every SQLite statement as a span named for what it does, with its text minus the values, and its duration as a metric.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+A program that uses SQLite through rusqlite. One line per connection, and every statement the connection runs gets:
+
+- a span named for what it does, such as `INSERT orders` or `SELECT orders`;
+- the statement's text on the span, with every value replaced by `?`, so no customer data reaches your telemetry;
+- its duration, in the `db.client.operation.duration` metric.
+
+This one uses an in-memory database, so there's nothing to set up. For PostgreSQL and sqlx, see [Databases](/guide/databases/).
+
+## The code
+
+<Example file="examples/database.rs" />
+
+## Dependencies
+
+<Example file="examples/database.rs" doc="toml" />
+
+rusqlite's `bundled` feature builds SQLite into the program. Leave it out to use the system's SQLite.
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/database.rs" doc="bash" />
+
+## What it prints
+
+The program's own log line, inside its `report` span:
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/database.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/database.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+The statements don't write log lines: they're spans. With nothing configured they aren't sent anywhere. `OTEL_TRACES_EXPORTER=console`, as in the second command above, prints each span on standard output as it ends:
+
+<Example file="examples/output/database.spans" title="Standard output" wrap />
+
+- Each statement's span is named by its operation and table, and marked `kind=client`: the program is the database's client.
+- In the `SELECT`, the value `'tea'` became `?`. The `INSERT`'s values were never in its text: they were passed as parameters, `?1` and `?2`.
+- The `SELECT` ran inside `report`, so it shares the report's trace id, and its `parent_id` is the report's span id. A backend shows it nested under the report. The other statements ran outside any span, so each is a trace of its own.
+- The report's log line is kept on its span as an event, since nothing here exports log records.
+
+CI runs the example both ways and checks it still prints these lines.
+
+## What's recorded
+
+The names follow the OpenTelemetry conventions for databases.
+
+| | |
+|---|---|
+| Span name | The statement's summary: its operation and table, such as `SELECT orders` |
+| `db.system.name` | `sqlite` |
+| `db.query.summary` | The same summary |
+| `db.query.text` | The statement, with every value replaced by `?` |
+| `db.client.operation.duration` | A histogram of each statement's duration in seconds, as SQLite timed it, by `db.system.name` and `db.query.summary` |
+
+SQLite's hooks don't say whether a statement failed, so these spans carry no error. Your code still sees the error from rusqlite as before.
+
+## For production
+
+- **Instrument every connection.** `instrument` covers the one connection it's given. If a pool opens connections, call it in the pool's hook that runs for each new one.
+- **Call it after `oxtel::init()`,** so the duration metric gets its unit, seconds, and the duration buckets that go with it.
+- **Leave the text out** if even the shape of your statements is private: `oxtel_sql::record_query_text(false)`.
+- **Turn the spans off** with `RUST_LOG=info,oxtel_sql=warn`: they're `info` spans with the target `oxtel_sql`. The metric is still recorded.
