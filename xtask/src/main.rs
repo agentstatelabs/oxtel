@@ -8,6 +8,10 @@
 //! - `cargo run -p xtask -- check-examples` builds each example that lists
 //!   its dependencies as a program of its own, with only those
 //!   dependencies.
+//! - `cargo run -p xtask -- check-output` runs the examples that have a
+//!   file in `examples/output/` and checks they still print what it shows,
+//!   since the site shows those files as their output. `--bless` rewrites
+//!   the files from a fresh run.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
@@ -55,8 +59,20 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         },
+        Some("check-output") => {
+            let bless = std::env::args().nth(2).as_deref() == Some("--bless");
+            match check_output(bless) {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprintln!("check-output failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
         _ => {
-            eprintln!("usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples");
+            eprintln!(
+                "usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples | check-output [--bless]"
+            );
             ExitCode::from(2)
         }
     }
@@ -253,4 +269,170 @@ fn dependency_names(block: &str) -> impl Iterator<Item = &str> {
         .filter_map(|line| line.split_once('='))
         .map(|(name, _)| name.trim())
         .filter(|name| !name.is_empty() && !name.starts_with('['))
+}
+
+/// Runs each example that has a file in `examples/output/` and compares
+/// what it writes to standard error with the file.
+/// `examples/output/<example>.<format>` is that output with
+/// `OXTEL_LOG_FORMAT=<format>` (`text`, `json` or `ecs`) and nothing else
+/// set. Timestamps and trace and span ids change on every run, so they're
+/// compared by their shape alone.
+fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let root = workspace_root();
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut files: Vec<PathBuf> = std::fs::read_dir(root.join("examples/output"))?
+        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+        .collect();
+    files.sort();
+    let mut failed = Vec::new();
+    for path in &files {
+        let (Some(example), Some(format)) = (
+            path.file_stem().and_then(|s| s.to_str()),
+            path.extension().and_then(|s| s.to_str()),
+        ) else {
+            continue;
+        };
+        if !matches!(format, "text" | "json" | "ecs") {
+            return Err(format!(
+                "{}: the extension must be text, json or ecs",
+                path.display()
+            )
+            .into());
+        }
+        // Build, then run the program itself, so what it writes isn't mixed
+        // with cargo's own output.
+        let built = Command::new(&cargo)
+            .current_dir(&root)
+            .args(["build", "-q", "-p", "oxtel-examples", "--example", example])
+            .args(["--message-format", "json-render-diagnostics"])
+            .stderr(std::process::Stdio::inherit())
+            .output()?;
+        if !built.status.success() {
+            return Err(format!("examples/{example}.rs doesn't build").into());
+        }
+        let executable = String::from_utf8(built.stdout)?
+            .lines()
+            .filter(|line| line.contains(r#""reason":"compiler-artifact""#))
+            .find_map(|line| {
+                let (_, rest) = line.split_once(r#""executable":""#)?;
+                Some(rest[..rest.find('"')?].to_string())
+            })
+            .ok_or_else(|| format!("cargo didn't say where it built examples/{example}.rs"))?;
+        let mut run = Command::new(executable);
+        run.current_dir(&root);
+        for (key, _) in std::env::vars() {
+            if key.starts_with("OTEL_") || key.starts_with("OXTEL_") || key == "RUST_LOG" {
+                run.env_remove(key);
+            }
+        }
+        let output = run.env("OXTEL_LOG_FORMAT", format).output()?;
+        if !output.status.success() {
+            return Err(format!("examples/{example}.rs failed: {}", output.status).into());
+        }
+        let got = String::from_utf8(output.stderr)?;
+        let shown = path.strip_prefix(&root).unwrap_or(path).display();
+        if bless {
+            std::fs::write(path, &got)?;
+            println!("wrote {shown}");
+        } else if shape(&got) == shape(&std::fs::read_to_string(path)?) {
+            println!("{shown} matches what examples/{example}.rs prints");
+        } else {
+            eprintln!("{shown} doesn't match what examples/{example}.rs prints:\n{got}");
+            failed.push(shown.to_string());
+        }
+    }
+    if files.is_empty() {
+        return Err("examples/output/ has no files".into());
+    }
+    if !failed.is_empty() {
+        return Err(format!(
+            "{} out of date; `cargo run -p xtask -- check-output --bless` rewrites them",
+            failed.join(", ")
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// `text` with each timestamp (`2026-10-09T12:00:00.123456Z`) replaced by
+/// `<time>`, and each trace or span id (32 or 16 lowercase hex digits) by
+/// `<id>`.
+fn shape(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut out = String::with_capacity(text.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let after_word = i > 0 && bytes[i - 1].is_ascii_alphanumeric();
+        if !after_word {
+            if let Some(len) = timestamp_len(&bytes[i..]) {
+                out.push_str("<time>");
+                i += len;
+                continue;
+            }
+            let hex = bytes[i..]
+                .iter()
+                .take_while(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(b))
+                .count();
+            let ends_word = bytes.get(i + hex).is_some_and(u8::is_ascii_alphanumeric);
+            if (hex == 16 || hex == 32) && !ends_word {
+                out.push_str("<id>");
+                i += hex;
+                continue;
+            }
+        }
+        let ch = text[i..]
+            .chars()
+            .next()
+            .expect("i is on a character boundary");
+        out.push(ch);
+        i += ch.len_utf8();
+    }
+    out
+}
+
+/// The length of the RFC 3339 UTC timestamp `bytes` starts with, if any.
+fn timestamp_len(bytes: &[u8]) -> Option<usize> {
+    const PATTERN: &[u8] = b"dddd-dd-ddTdd:dd:dd";
+    if bytes.len() < PATTERN.len() {
+        return None;
+    }
+    let fits = PATTERN.iter().zip(bytes).all(|(p, b)| match p {
+        b'd' => b.is_ascii_digit(),
+        p => p == b,
+    });
+    if !fits {
+        return None;
+    }
+    let mut len = PATTERN.len();
+    if bytes.get(len) == Some(&b'.') {
+        len += 1 + bytes[len + 1..]
+            .iter()
+            .take_while(|b| b.is_ascii_digit())
+            .count();
+    }
+    (bytes.get(len) == Some(&b'Z')).then_some(len + 1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_hides_what_changes_between_runs() {
+        assert_eq!(
+            shape(
+                r#"{"timestamp":"2026-11-20T20:24:56.619735Z","trace_id":"7ecfce50f920491ee1086c2912891261","span_id":"855293a13f688a21","order.id":7}"#
+            ),
+            r#"{"timestamp":"<time>","trace_id":"<id>","span_id":"<id>","order.id":7}"#
+        );
+        assert_eq!(
+            shape("2026-11-20T20:25:17Z  WARN request: retrying span_id=1be284c0a8537bcc"),
+            "<time>  WARN request: retrying span_id=<id>"
+        );
+        // Not ids: too short, too long, or part of a longer word.
+        assert_eq!(
+            shape("deadbeef x1be284c0a8537bcc 1be284c0a8537bcc0"),
+            "deadbeef x1be284c0a8537bcc 1be284c0a8537bcc0"
+        );
+    }
 }
