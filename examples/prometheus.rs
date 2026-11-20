@@ -36,8 +36,13 @@ fn main() -> Result<(), oxtel::Error> {
     // Stands in for a real service: an order every second, and every third
     // second two of them shipped. Each scrape reads the values as they are.
     let mut pending: u32 = 0;
-    for second in 0u64.. {
-        let channel = if second % 4 == 0 { "app" } else { "web" };
+    let mut second: u64 = 0;
+    loop {
+        let channel = if second.is_multiple_of(4) {
+            "app"
+        } else {
+            "web"
+        };
         metrics::counter!("orders.placed", "channel" => channel).increment(1);
         let checkout = 0.05 + (second % 5) as f64 * 0.02;
         metrics::histogram!("orders.checkout.duration").record(checkout);
@@ -47,6 +52,6 @@ fn main() -> Result<(), oxtel::Error> {
         }
         metrics::gauge!("orders.pending").set(pending);
         std::thread::sleep(Duration::from_secs(1));
+        second += 1;
     }
-    Ok(())
 }
