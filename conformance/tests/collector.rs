@@ -606,3 +606,111 @@ fn json_lines_reach_the_collector_intact() {
     assert_eq!(sum["dataPoints"][0]["asInt"], "3");
     assert_eq!(sum["isMonotonic"], true);
 }
+
+/// Deltas and exponential histograms, as an exporter asks for them with
+/// `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` and
+/// `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram`.
+#[test]
+#[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
+fn delta_and_exponential_metrics_reach_the_collector() {
+    delta_and_exponential_in(Protocol::HttpProtobuf);
+    delta_and_exponential_in(Protocol::HttpJson);
+}
+
+fn delta_and_exponential_in(protocol: Protocol) {
+    use oxtel_sdk::metrics::{HistogramAggregation, TemporalityPreference};
+
+    let run = run_id();
+    let meters = MeterProvider::builder()
+        .with_resource(
+            Resource::builder()
+                .without_env()
+                .with_service_name("oxtel-conformance")
+                .build(),
+        )
+        .with_periodic_exporter_config(
+            OtlpHttpExporter::builder()
+                .with_endpoint(&otlp_base())
+                .with_protocol(protocol)
+                .with_temporality_preference(TemporalityPreference::Delta)
+                .with_histogram_aggregation(HistogramAggregation::EXPONENTIAL)
+                .build(),
+            PeriodicReaderConfig {
+                interval: Duration::from_secs(3600),
+                timeout: Duration::from_secs(20),
+            },
+        )
+        .build();
+    let record = |count: u64, values: &[f64]| {
+        metrics::with_local_recorder(&meters.recorder(), || {
+            metrics::counter!("oxtel.conformance.deltas", "run" => run.clone()).increment(count);
+            for v in values {
+                metrics::histogram!("oxtel.conformance.sizes", "run" => run.clone()).record(*v);
+            }
+        });
+        meters
+            .force_flush()
+            .expect("the Collector refused the export");
+    };
+    record(5, &[0.0, 0.5, 3.0, 1000.0]);
+    record(2, &[8.0]);
+
+    let batches = lines_with("metrics.json", &run, 2, Duration::from_secs(20));
+    let points = |name: &str, data: &str| -> Vec<(Value, Value)> {
+        metrics_named(&batches, name)
+            .into_iter()
+            .filter(|m| m["name"] == name)
+            .flat_map(|m| {
+                m[data]["dataPoints"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|p| attr(&p["attributes"], "run")["stringValue"] == run.as_str())
+                    .map(|p| (m[data].clone(), p.clone()))
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    };
+
+    let sums = points("oxtel.conformance.deltas", "sum");
+    assert_eq!(sums.len(), 2, "{sums:?}");
+    for (sum, _) in &sums {
+        assert_eq!(sum["aggregationTemporality"], 1, "DELTA");
+        assert_eq!(sum["isMonotonic"], true);
+    }
+    assert_eq!(
+        (&sums[0].1["asInt"], &sums[1].1["asInt"]),
+        (&"5".into(), &"2".into())
+    );
+    assert_eq!(
+        sums[1].1["startTimeUnixNano"], sums[0].1["timeUnixNano"],
+        "each delta starts where the previous one ended"
+    );
+
+    let histograms = points("oxtel.conformance.sizes", "exponentialHistogram");
+    assert_eq!(histograms.len(), 2, "{histograms:?}");
+    let (data, first) = &histograms[0];
+    assert_eq!(data["aggregationTemporality"], 1, "DELTA");
+    assert_eq!(first["count"], "4");
+    assert_eq!(first["zeroCount"], "1");
+    assert!((first["sum"].as_f64().unwrap() - 1003.5).abs() < 1e-9);
+    assert_eq!(
+        (first["min"].as_f64(), first["max"].as_f64()),
+        (Some(0.0), Some(1000.0))
+    );
+    let scale = first["scale"].as_i64().expect("a scale");
+    assert!((-10..=20).contains(&scale));
+    let counted: u64 = first["positive"]["bucketCounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n.as_str().unwrap().parse::<u64>().unwrap())
+        .sum();
+    assert_eq!(counted, 3, "the three positive values");
+    let (_, second) = &histograms[1];
+    assert_eq!(second["count"], "1");
+    assert_eq!(
+        (second["min"].as_f64(), second["max"].as_f64()),
+        (Some(8.0), Some(8.0))
+    );
+}

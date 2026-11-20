@@ -10,6 +10,10 @@ use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
+
+use crate::metrics::data::Temporality;
+use crate::metrics::exponential::ExpState;
+use crate::metrics::view::{AttributeKeys, View, ViewAggregation};
 use std::time::SystemTime;
 
 use metrics::{Counter, CounterFn, Gauge, GaugeFn, Histogram, HistogramFn, Key, KeyName};
@@ -106,6 +110,24 @@ pub(crate) struct Config {
     pub(crate) cardinality_limit: usize,
     pub(crate) exemplar_filter: ExemplarFilter,
     pub(crate) buckets: Vec<(String, Arc<[f64]>)>,
+    /// How many readers want deltas: each gets its own minimum and maximum
+    /// per histogram, reset when it collects.
+    pub(crate) interval_slots: usize,
+    /// Keep histograms in exponential buckets too, with this size and
+    /// scale, for readers that want them.
+    pub(crate) exponential: Option<(u32, i8)>,
+    /// The views, in order: the first that selects an instrument applies.
+    pub(crate) views: Vec<View>,
+}
+
+/// What one collection wants.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Collection {
+    /// Histograms in exponential buckets, where they're kept.
+    pub(crate) exponential: bool,
+    /// The reader's minimum-and-maximum slot: histograms' min and max are
+    /// then those since its previous collection, and start again.
+    pub(crate) interval: Option<usize>,
 }
 
 /// The facade's key hash is computed once per key; pass it through.
@@ -140,6 +162,7 @@ enum Entry {
 }
 
 struct Instrument {
+    /// The metric's name: the instrument's, or a view's.
     name: String,
     kind: MetricKind,
     scope: Scope,
@@ -147,6 +170,22 @@ struct Instrument {
     description: Mutex<Option<String>>,
     bounds: Arc<[f64]>,
     series: Mutex<HashMap<Vec<(String, String)>, Entry>>,
+    /// What a view changed.
+    shape: Shape,
+}
+
+/// What a view changes about an instrument's metric.
+#[derive(Clone, Debug)]
+struct Shape {
+    /// Not recorded at all.
+    dropped: bool,
+    /// A description the view gave, which `describe` doesn't replace.
+    fixed_description: bool,
+    attribute_keys: Option<AttributeKeys>,
+    cardinality_limit: usize,
+    record_min_max: bool,
+    /// Exponential buckets, for every reader, with this size and scale.
+    exponential: Option<(u32, i8)>,
 }
 
 pub(crate) struct Store {
@@ -187,7 +226,9 @@ impl Store {
             if let Some(unit) = unit.and_then(ucum) {
                 *lock(&instrument.unit) = Some(unit.to_string());
             }
-            *lock(&instrument.description) = Some(description.to_string());
+            if !instrument.shape.fixed_description {
+                *lock(&instrument.description) = Some(description.to_string());
+            }
         }
     }
 
@@ -223,11 +264,60 @@ impl Store {
                 ),
                 None => (None, None),
             };
-            let bounds = self.bounds_for(name, unit.as_deref());
+            let mut bounds = self.bounds_for(name, unit.as_deref());
             let target = meta.target();
             let scope = target.split("::").next().unwrap_or(target).to_string();
+            let view = self
+                .config
+                .views
+                .iter()
+                .find(|v| v.selects(name, kind, unit.as_deref(), &scope));
+            let mut shape = Shape {
+                dropped: false,
+                fixed_description: false,
+                attribute_keys: None,
+                cardinality_limit: self.config.cardinality_limit,
+                record_min_max: true,
+                exponential: None,
+            };
+            let mut description = description;
+            if let Some(view) = view {
+                if let Some(d) = &view.description {
+                    description = Some(d.clone());
+                    shape.fixed_description = true;
+                }
+                shape.attribute_keys.clone_from(&view.attribute_keys);
+                if let Some(limit) = view.cardinality_limit {
+                    shape.cardinality_limit = limit;
+                }
+                match &view.aggregation {
+                    None | Some(ViewAggregation::Default) => {}
+                    Some(ViewAggregation::Drop) => shape.dropped = true,
+                    Some(ViewAggregation::ExplicitBuckets {
+                        boundaries,
+                        record_min_max,
+                    }) => {
+                        let mut b: Vec<f64> =
+                            boundaries.iter().copied().filter(|b| !b.is_nan()).collect();
+                        b.sort_by(f64::total_cmp);
+                        b.dedup();
+                        bounds = b.into();
+                        shape.record_min_max = *record_min_max;
+                    }
+                    Some(ViewAggregation::Exponential {
+                        max_size,
+                        max_scale,
+                        record_min_max,
+                    }) => {
+                        shape.exponential = Some((*max_size, *max_scale));
+                        shape.record_min_max = *record_min_max;
+                    }
+                }
+            }
             Arc::new(Instrument {
-                name: name.to_string(),
+                name: view
+                    .and_then(|v| v.name.clone())
+                    .unwrap_or_else(|| name.to_string()),
                 kind,
                 scope: Scope {
                     name: Cow::Owned(scope),
@@ -237,6 +327,7 @@ impl Store {
                 description: Mutex::new(description),
                 bounds,
                 series: Mutex::default(),
+                shape,
             })
         });
         Arc::clone(instrument)
@@ -267,7 +358,7 @@ impl Store {
 
     fn create(&self, kind: MetricKind, key: &Key, meta: &Metadata<'_>) -> Entry {
         let instrument = self.instrument(kind, key.name(), meta);
-        if instrument.kind != kind {
+        if instrument.kind != kind || instrument.shape.dropped {
             return Entry::Unusable;
         }
         let mut labels: Vec<(String, String)> = key
@@ -276,12 +367,15 @@ impl Store {
             .collect();
         labels.sort();
         labels.dedup_by(|later, earlier| later.0 == earlier.0);
+        if let Some(keys) = &instrument.shape.attribute_keys {
+            labels.retain(|(k, _)| keys.keeps(k));
+        }
         let mut series = lock(&instrument.series);
         if let Some(entry) = series.get(&labels) {
             return entry.clone();
         }
         let overflow = vec![(OVERFLOW_ATTRIBUTE.to_string(), "true".to_string())];
-        let labels = if series.len() + 1 >= self.config.cardinality_limit.max(1) {
+        let labels = if series.len() + 1 >= instrument.shape.cardinality_limit.max(1) {
             if let Some(entry) = series.get(&overflow) {
                 return entry.clone();
             }
@@ -309,6 +403,21 @@ impl Store {
                     max: AtomicU64::new(f64::NEG_INFINITY.to_bits()),
                     exemplars: Mutex::new(vec![None; buckets]),
                     filter,
+                    intervals: (0..self.config.interval_slots)
+                        .map(|_| {
+                            (
+                                AtomicU64::new(f64::INFINITY.to_bits()),
+                                AtomicU64::new(f64::NEG_INFINITY.to_bits()),
+                            )
+                        })
+                        .collect(),
+                    exponential: instrument
+                        .shape
+                        .exponential
+                        .or(self.config.exponential)
+                        .map(|(size, scale)| Mutex::new(ExpState::new(size, scale))),
+                    always_exponential: instrument.shape.exponential.is_some(),
+                    record_min_max: instrument.shape.record_min_max,
                 }))
             }
         };
@@ -316,7 +425,12 @@ impl Store {
         entry
     }
 
+    /// Every metric, cumulative, with histograms in explicit buckets.
     pub(crate) fn collect(&self) -> Vec<MetricFamily> {
+        self.collect_with(Collection::default())
+    }
+
+    pub(crate) fn collect_with(&self, collection: Collection) -> Vec<MetricFamily> {
         let time = SystemTime::now();
         let mut instruments: Vec<Arc<Instrument>> = self
             .instruments
@@ -325,13 +439,14 @@ impl Store {
             .values()
             .cloned()
             .collect();
+        instruments.retain(|i| !i.shape.dropped);
         instruments.sort_by(|a, b| a.name.cmp(&b.name));
         instruments
             .into_iter()
             .map(|instrument| {
                 let mut points: Vec<Point> = lock(&instrument.series)
                     .iter()
-                    .filter_map(|(labels, entry)| entry.point(labels))
+                    .filter_map(|(labels, entry)| entry.point(labels, collection))
                     .collect();
                 points.sort_by(|a, b| a.attributes.cmp(&b.attributes));
                 MetricFamily {
@@ -341,6 +456,7 @@ impl Store {
                     kind: instrument.kind,
                     scope: instrument.scope.clone(),
                     points,
+                    temporality: Temporality::Cumulative,
                     start_time: self.start_time,
                     time,
                 }
@@ -350,7 +466,7 @@ impl Store {
 }
 
 impl Entry {
-    fn point(&self, labels: &[(String, String)]) -> Option<Point> {
+    fn point(&self, labels: &[(String, String)], collection: Collection) -> Option<Point> {
         let (value, exemplar) = match self {
             Entry::Counter(c) => (
                 PointValue::Counter(c.value.sum()),
@@ -360,7 +476,7 @@ impl Entry {
                 PointValue::Gauge(f64::from_bits(g.bits.load(Ordering::Relaxed))),
                 None,
             ),
-            Entry::Histogram(h) => (PointValue::Histogram(h.snapshot()), None),
+            Entry::Histogram(h) => (h.snapshot(collection), None),
             Entry::Unusable => return None,
         };
         Some(Point {
@@ -430,6 +546,15 @@ struct HistogramCell {
     max: AtomicU64,
     exemplars: Mutex<Vec<Option<Exemplar>>>,
     filter: ExemplarFilter,
+    /// The minimum and maximum since each delta reader's previous
+    /// collection.
+    intervals: Box<[(AtomicU64, AtomicU64)]>,
+    /// The same values in exponential buckets, when a reader wants them.
+    exponential: Option<Mutex<ExpState>>,
+    /// A view asked for exponential buckets, so every reader gets them.
+    always_exponential: bool,
+    /// Report the minimum and maximum, unless a view says not to.
+    record_min_max: bool,
 }
 
 impl HistogramFn for HistogramCell {
@@ -442,6 +567,13 @@ impl HistogramFn for HistogramCell {
         update_f64(&self.sum, |s| s + value);
         update_f64(&self.min, |m| m.min(value));
         update_f64(&self.max, |m| m.max(value));
+        for (min, max) in &self.intervals {
+            update_f64(min, |m| m.min(value));
+            update_f64(max, |m| m.max(value));
+        }
+        if let Some(exponential) = &self.exponential {
+            lock(exponential).record(value);
+        }
         if let Some(e) = self.filter.capture(value)
             && let Ok(mut slots) = self.exemplars.try_lock()
         {
@@ -451,7 +583,43 @@ impl HistogramFn for HistogramCell {
 }
 
 impl HistogramCell {
-    fn snapshot(&self) -> HistogramPoint {
+    fn snapshot(&self, collection: Collection) -> PointValue {
+        // Since the reader's previous collection, if it wants deltas.
+        let interval = collection
+            .interval
+            .and_then(|slot| self.intervals.get(slot))
+            .map(|(min, max)| {
+                let min = f64::from_bits(min.swap(f64::INFINITY.to_bits(), Ordering::Relaxed));
+                let max = f64::from_bits(max.swap(f64::NEG_INFINITY.to_bits(), Ordering::Relaxed));
+                (
+                    min.is_finite().then_some(min),
+                    max.is_finite().then_some(max),
+                )
+            });
+        if (collection.exponential || self.always_exponential)
+            && let Some(exponential) = &self.exponential
+        {
+            let mut point = lock(exponential).snapshot();
+            if let Some((min, max)) = interval {
+                (point.min, point.max) = (min, max);
+            }
+            if !self.record_min_max {
+                (point.min, point.max) = (None, None);
+            }
+            point.exemplars = lock(&self.exemplars).iter().flatten().cloned().collect();
+            return PointValue::ExponentialHistogram(point);
+        }
+        let mut point = self.explicit();
+        if let Some((min, max)) = interval {
+            (point.min, point.max) = (min, max);
+        }
+        if !self.record_min_max {
+            (point.min, point.max) = (None, None);
+        }
+        PointValue::Histogram(point)
+    }
+
+    fn explicit(&self) -> HistogramPoint {
         let bucket_counts: Vec<u64> = self
             .counts
             .iter()

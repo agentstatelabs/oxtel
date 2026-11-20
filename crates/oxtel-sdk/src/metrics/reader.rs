@@ -1,14 +1,17 @@
 //! The periodic reader: collects the store on a timer and exports it.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use crate::export::{Counters, ExportError, ProcessorStats};
+use crate::metrics::data::{MetricFamily, MetricKind, PointValue, Temporality};
+use crate::metrics::exponential;
 use crate::metrics::export::MetricExporter;
-use crate::metrics::store::Store;
+use crate::metrics::store::{Collection, Store};
 use crate::resource::Resource;
 use crate::sdk_metrics::ReaderMetrics;
 
@@ -70,6 +73,7 @@ impl PeriodicReader {
         resource: Resource,
         exporter: Box<dyn MetricExporter>,
         config: PeriodicReaderConfig,
+        collection: Collection,
     ) -> Self {
         let (sender, receiver) = mpsc::channel();
         let counters = Arc::new(Counters::new(
@@ -88,6 +92,7 @@ impl PeriodicReader {
                         exporter.as_ref(),
                         config.interval,
                         &worker_counters,
+                        collection,
                     )
                 })
             })
@@ -154,11 +159,16 @@ fn run(
     exporter: &dyn MetricExporter,
     interval: Duration,
     counters: &Counters,
+    collection: Collection,
 ) {
     let reader_metrics = ReaderMetrics::new("periodic_metric_reader");
-    let export = || {
+    let mut deltas = Deltas {
+        since: store.start_time(),
+        last: HashMap::new(),
+    };
+    let mut export = || {
         let started = Instant::now();
-        let metrics = store.collect();
+        let metrics = deltas.apply(store.collect_with(collection), exporter);
         reader_metrics.collected(started.elapsed());
         let points: usize = metrics.iter().map(|m| m.points.len()).sum();
         if points == 0 {
@@ -188,5 +198,94 @@ fn run(
                 return;
             }
         }
+    }
+}
+
+/// What a reader exported last, to turn cumulative values into deltas:
+/// each series' total then, and when that was.
+struct Deltas {
+    since: SystemTime,
+    last: HashMap<(String, Vec<(String, String)>), PointValue>,
+}
+
+impl Deltas {
+    /// `families`, cumulative, as `exporter` wants them. Counters and
+    /// histograms it wants as deltas become the change since the previous
+    /// collection, and series that didn't change are left out, as the
+    /// specification requires of synchronous instruments. Exemplars from
+    /// before then are left out too.
+    fn apply(
+        &mut self,
+        families: Vec<MetricFamily>,
+        exporter: &dyn MetricExporter,
+    ) -> Vec<MetricFamily> {
+        let since = self.since;
+        let mut collected = None;
+        let families = families
+            .into_iter()
+            .map(|mut family| {
+                collected = Some(family.time);
+                if family.kind == MetricKind::Gauge
+                    || exporter.temporality(family.kind) != Temporality::Delta
+                {
+                    return family;
+                }
+                family.temporality = Temporality::Delta;
+                family.start_time = since;
+                let points = std::mem::take(&mut family.points);
+                family.points = points
+                    .into_iter()
+                    .filter_map(|mut point| {
+                        let key = (family.name.clone(), point.attributes.clone());
+                        let before = self.last.insert(key, point.value.clone());
+                        let changed = match (&mut point.value, before) {
+                            (PointValue::Counter(now), Some(PointValue::Counter(before))) => {
+                                *now = now.saturating_sub(before);
+                                *now > 0
+                            }
+                            (PointValue::Counter(now), _) => *now > 0,
+                            (PointValue::Histogram(now), Some(PointValue::Histogram(before)))
+                                if now.bounds == before.bounds =>
+                            {
+                                for (n, b) in
+                                    now.bucket_counts.iter_mut().zip(&before.bucket_counts)
+                                {
+                                    *n = n.saturating_sub(*b);
+                                }
+                                now.sum -= before.sum;
+                                now.count() > 0
+                            }
+                            (PointValue::Histogram(now), _) => now.count() > 0,
+                            (
+                                PointValue::ExponentialHistogram(now),
+                                Some(PointValue::ExponentialHistogram(before)),
+                            ) => {
+                                *now = exponential::delta(now, &before);
+                                now.count > 0
+                            }
+                            (PointValue::ExponentialHistogram(now), _) => now.count > 0,
+                            (PointValue::Gauge(_), _) => true,
+                        };
+                        let recent = |e: &crate::metrics::Exemplar| e.time > since;
+                        point.exemplar = point.exemplar.filter(recent);
+                        match &mut point.value {
+                            PointValue::Histogram(h) => {
+                                for slot in &mut h.exemplars {
+                                    *slot = slot.take().filter(recent);
+                                }
+                            }
+                            PointValue::ExponentialHistogram(h) => h.exemplars.retain(recent),
+                            _ => {}
+                        }
+                        changed.then_some(point)
+                    })
+                    .collect();
+                family
+            })
+            .collect();
+        if let Some(time) = collected {
+            self.since = time;
+        }
+        families
     }
 }

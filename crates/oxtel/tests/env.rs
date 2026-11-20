@@ -401,9 +401,9 @@ logger_provider:
     - simple:
         exporter:
           console:
+attribute_limits:
+  attribute_value_length_limit: 4096
 meter_provider:
-  views:
-    - selector: {instrument_name: x}
   readers:
     - pull:
         exporter:
@@ -430,7 +430,7 @@ meter_provider:
     assert!(stdout.contains(" span \"request\""), "{stdout}");
     assert!(stdout.contains(" WARN env: slow lookup"), "{stdout}");
     assert!(
-        stdout.contains("`meter_provider.views` isn't supported yet"),
+        stdout.contains("`attribute_limits.attribute_value_length_limit` isn't supported yet"),
         "the file's unsupported parts are reported: {stdout}"
     );
 }
@@ -521,6 +521,52 @@ meter_provider:
         }),
         "{metrics:#?}"
     );
+}
+
+#[test]
+#[cfg(feature = "config")]
+fn a_configuration_file_s_views_apply() {
+    if in_child() {
+        let telemetry = oxtel::builder().build().unwrap();
+        assert!(
+            telemetry.warnings().is_empty(),
+            "{:?}",
+            telemetry.warnings()
+        );
+        let guard = telemetry.install().unwrap();
+        metrics::counter!("requests.handled", "url.path" => "/a", "method" => "GET").increment(2);
+        metrics::counter!("noise").increment(1);
+        guard.shutdown().unwrap();
+        return;
+    }
+    let path = config_file(
+        "views",
+        r#"
+file_format: "1.2"
+meter_provider:
+  views:
+    - selector: {instrument_name: noise}
+      stream: {aggregation: {drop: }}
+    - selector: {instrument_name: requests.*, instrument_type: counter}
+      stream:
+        name: handled
+        attribute_keys: {excluded: [url.path]}
+  readers:
+    - periodic:
+        interval: 3600000
+        exporter:
+          console:
+"#,
+    );
+    let output = child(
+        "a_configuration_file_s_views_apply",
+        &[("OTEL_CONFIG_FILE", &path)],
+    );
+    let _ = std::fs::remove_file(&path);
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(stdout.contains(" metric handled{method=GET} 2"), "{stdout}");
+    assert!(!stdout.contains("noise"), "dropped: {stdout}");
+    assert!(!stdout.contains("url.path"), "{stdout}");
 }
 
 #[test]

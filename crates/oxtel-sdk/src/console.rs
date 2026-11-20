@@ -261,6 +261,12 @@ impl MetricExporter for ConsoleExporter {
                             let _ = write!(text, " min={min} max={max}");
                         }
                     }
+                    PointValue::ExponentialHistogram(h) => {
+                        let _ = write!(text, " count={} sum={} scale={}", h.count, h.sum, h.scale);
+                        if let (Some(min), Some(max)) = (h.min, h.max) {
+                            let _ = write!(text, " min={min} max={max}");
+                        }
+                    }
                 }
                 if let Some(unit) = &family.unit {
                     let _ = write!(text, " {unit}");

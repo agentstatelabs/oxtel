@@ -5,7 +5,10 @@ use oxtel_prometheus::Options as PrometheusOptions;
 use oxtel_sdk::console::ConsoleExporter;
 use oxtel_sdk::export::{BatchConfig, ExportError};
 use oxtel_sdk::logs::{LogExporter, LogLimits, LogRecord};
-use oxtel_sdk::metrics::{ExemplarFilter, MetricExporter, MetricFamily, PeriodicReaderConfig};
+use oxtel_sdk::metrics::{
+    ExemplarFilter, HistogramAggregation, MetricExporter, MetricFamily, MetricKind,
+    PeriodicReaderConfig, Temporality,
+};
 use oxtel_sdk::resource::{Detector, ResourceBuilder};
 use oxtel_sdk::trace::{Sampler, SpanData, SpanExporter, SpanLimits};
 use oxtel_sdk::{KeyValue, Resource};
@@ -128,6 +131,34 @@ impl MetricExporter for Sink {
             Sink::Console(c) => MetricExporter::destination(c),
         }
     }
+
+    fn temporality(&self, kind: MetricKind) -> Temporality {
+        match self {
+            #[cfg(feature = "otlp")]
+            Sink::Otlp(o) => MetricExporter::temporality(o, kind),
+            #[cfg(not(feature = "otlp"))]
+            Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => MetricExporter::temporality(f, kind),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
+            Sink::Console(c) => MetricExporter::temporality(c, kind),
+        }
+    }
+
+    fn histogram_aggregation(&self) -> HistogramAggregation {
+        match self {
+            #[cfg(feature = "otlp")]
+            Sink::Otlp(o) => MetricExporter::histogram_aggregation(o),
+            #[cfg(not(feature = "otlp"))]
+            Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => MetricExporter::histogram_aggregation(f),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
+            Sink::Console(c) => MetricExporter::histogram_aggregation(c),
+        }
+    }
 }
 
 /// A span or log record processor to add.
@@ -160,6 +191,8 @@ pub(crate) struct Plan {
     pub(crate) readers: Vec<Reader>,
     pub(crate) exemplar_filter: Option<ExemplarFilter>,
     pub(crate) cardinality_limit: Option<usize>,
+    /// Views, from a configuration file.
+    pub(crate) views: Vec<oxtel_sdk::metrics::View>,
     /// `OXTEL_LOG_FORMAT` and `OXTEL_LOG_OUTPUT`, where set.
     pub(crate) local: LocalEnv,
     pub(crate) warnings: Vec<String>,
@@ -301,6 +334,7 @@ impl Plan {
             readers,
             exemplar_filter: None,
             cardinality_limit: None,
+            views: Vec::new(),
             local: env.local,
             warnings,
         }
@@ -486,10 +520,94 @@ impl Plan {
             readers,
             exemplar_filter: Some(exemplar_filter),
             cardinality_limit: mp.cardinality_limit,
+            views: mp
+                .views
+                .iter()
+                .filter_map(|v| config_view(v, &mut warnings))
+                .collect(),
             local,
             warnings,
         }
     }
+}
+
+/// The view a configuration describes, or `None`, with a warning, for one
+/// that could select nothing in oxtel.
+#[cfg(feature = "config")]
+fn config_view(
+    v: &oxtel_config::ViewConfig,
+    warnings: &mut Vec<String>,
+) -> Option<oxtel_sdk::metrics::View> {
+    use oxtel_config::AggregationConfig as A;
+    use oxtel_sdk::metrics::{AttributeKeys, MetricKind, View, ViewAggregation};
+
+    let kind = match v.instrument_type.as_deref() {
+        None => None,
+        Some("counter") => Some(MetricKind::Counter),
+        Some("histogram") => Some(MetricKind::Histogram),
+        // The `metrics` facade's gauges move up and down, or are set.
+        Some("gauge" | "up_down_counter") => Some(MetricKind::Gauge),
+        Some(other) => {
+            warnings.push(format!(
+                "a view selects instrument_type `{other}`, which oxtel's `metrics` instruments \
+                 never are; ignored"
+            ));
+            return None;
+        }
+    };
+    let aggregation = v.aggregation.as_ref().map(|a| match a {
+        A::Default => ViewAggregation::Default,
+        A::Drop => ViewAggregation::Drop,
+        // What counters and gauges already do.
+        A::Sum | A::LastValue => {
+            let fits = matches!(
+                (a, kind),
+                (A::Sum, Some(MetricKind::Counter)) | (A::LastValue, Some(MetricKind::Gauge))
+            );
+            if !fits {
+                warnings.push(
+                    "a view's `sum` or `last_value` aggregation only fits counters or gauges, \
+                     which already aggregate that way; each instrument keeps its own"
+                        .into(),
+                );
+            }
+            ViewAggregation::Default
+        }
+        A::ExplicitBucketHistogram {
+            boundaries,
+            record_min_max,
+        } => ViewAggregation::ExplicitBuckets {
+            boundaries: boundaries
+                .clone()
+                .unwrap_or_else(|| oxtel_sdk::metrics::DEFAULT_BUCKETS.to_vec()),
+            record_min_max: record_min_max.unwrap_or(true),
+        },
+        A::Base2ExponentialBucketHistogram {
+            max_scale,
+            max_size,
+            record_min_max,
+        } => ViewAggregation::Exponential {
+            max_size: max_size.map_or(160, |s| u32::try_from(s).unwrap_or(u32::MAX)),
+            max_scale: max_scale.map_or(20, |s| s.clamp(-10, 20) as i8),
+            record_min_max: record_min_max.unwrap_or(true),
+        },
+    });
+    let attribute_keys = match (&v.attributes_included, &v.attributes_excluded) {
+        (Some(included), _) => Some(AttributeKeys::Included(included.clone())),
+        (None, Some(excluded)) => Some(AttributeKeys::Excluded(excluded.clone())),
+        (None, None) => None,
+    };
+    Some(View {
+        instrument_name: v.instrument_name.clone(),
+        instrument_kind: kind,
+        unit: v.unit.clone(),
+        meter_name: v.meter_name.clone(),
+        name: v.name.clone(),
+        description: v.description.clone(),
+        aggregation,
+        attribute_keys,
+        cardinality_limit: v.cardinality_limit,
+    })
 }
 
 /// The sampler a configuration names: parent-based always-on by default.
@@ -625,6 +743,10 @@ pub(crate) struct OtlpSettings<'a> {
     tls: &'a oxtel_config::TlsConfig,
     /// `http/protobuf`, `http/json` or `grpc`.
     protocol: &'static str,
+    /// `temporality_preference`, for metrics.
+    temporality_preference: Option<&'a str>,
+    /// `default_histogram_aggregation` is exponential, for metrics.
+    exponential_histograms: bool,
 }
 
 #[cfg(feature = "config")]
@@ -638,6 +760,8 @@ impl<'a> OtlpSettings<'a> {
             timeout_ms: o.timeout_ms,
             tls: &o.tls,
             protocol: if o.json { "http/json" } else { "http/protobuf" },
+            temporality_preference: o.temporality_preference.as_deref(),
+            exponential_histograms: o.exponential_histograms,
         }
     }
 
@@ -650,6 +774,8 @@ impl<'a> OtlpSettings<'a> {
             timeout_ms: o.timeout_ms,
             tls: &o.tls,
             protocol: "grpc",
+            temporality_preference: None,
+            exponential_histograms: false,
         }
     }
 }
@@ -690,7 +816,17 @@ fn otlp_from_config(
                 client_certificate: o.tls.cert_file.as_ref().map(Into::into),
                 client_key: o.tls.key_file.as_ref().map(Into::into),
             },
-        );
+        )
+        .with_temporality_preference(
+            o.temporality_preference
+                .and_then(oxtel_sdk::metrics::TemporalityPreference::from_name)
+                .unwrap_or_default(),
+        )
+        .with_histogram_aggregation(if o.exponential_histograms {
+            HistogramAggregation::EXPONENTIAL
+        } else {
+            HistogramAggregation::Explicit
+        });
     if let Some(ms) = o.timeout_ms.filter(|&ms| ms > 0) {
         b = b.with_timeout(std::time::Duration::from_millis(ms));
     }

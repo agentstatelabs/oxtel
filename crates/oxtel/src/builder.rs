@@ -318,6 +318,7 @@ impl Builder {
             readers,
             exemplar_filter,
             cardinality_limit,
+            views,
             local: env_local,
             mut warnings,
         } = plan;
@@ -479,6 +480,9 @@ impl Builder {
                 }
                 if let Some(limit) = cardinality_limit {
                     b = b.with_cardinality_limit(limit);
+                }
+                for view in views {
+                    b = b.with_view(view);
                 }
                 let mut pull = Vec::new();
                 for reader in readers {

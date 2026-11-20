@@ -36,11 +36,29 @@ All notable changes to oxtel are recorded here. The format follows
 - **TLS certificate files, for every protocol.** `OTEL_EXPORTER_OTLP_CERTIFICATE` names the certificates that verify the receiver, in place of the bundled roots, and `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `_CLIENT_KEY` a client certificate and key for mutual TLS. Each also has a per-signal variable, such as `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`. A configuration file's `tls` (`ca_file`, `cert_file` and `key_file`) works too, where it was warned about before.
   - A file that can't be read, or a certificate without its key, is a warning at startup naming the file. That signal isn't sent, and if it's tried anyway, each export fails saying why.
   - In code: `OtlpHttpExporterBuilder::with_certificate`, `with_client_certificate` and `with_tls`.
+- **Delta temporality**, for backends that prefer it. `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` (or `lowmemory`, which is the same for oxtel's synchronous instruments) makes an OTLP exporter's counters and histograms report the change since its previous export, as the specification defines it.
+  - Series with no new measurements are left out.
+  - A histogram's min and max are the interval's.
+  - Only exemplars from the interval are sent.
+  - Each delta's start time is the previous export's time.
+  - Gauges have no temporality. Prometheus and other readers keep their totals, and so does each other exporter: temporality is per exporter.
+- **Exponential histograms.** `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram` makes an OTLP exporter's histograms base-2 exponential: up to 160 buckets per sign, at the finest scale (up to 20) that holds the recorded range, rescaled as it grows, with zeros counted apart.
+  - They're kept alongside the explicit buckets only when an exporter asks for them, so Prometheus scrapes are unchanged.
+  - They work with delta temporality: deltas are exact across a change of scale.
+- **Both in a configuration file:** an OTLP exporter's `temporality_preference` and `default_histogram_aggregation`, which were warned about before.
+- **Views**, from a configuration file's `meter_provider.views` or `MeterProviderBuilder::with_view`.
+  - A view selects instruments by name (with `*` and `?`), type, unit or meter name. The first view that selects an instrument applies.
+  - It can rename the metric or change its description.
+  - It can drop the metric, give it explicit buckets (with or without min and max), or make it an exponential histogram for every reader.
+  - It can keep only some attributes, or all but some, and set its own series limit.
+  - Observable instrument types select nothing, since the `metrics` facade has none, and a `sum` or `last_value` aggregation leaves an instrument as it is. Both are warnings.
+- `MetricExporter` has two new methods, `temporality` and `histogram_aggregation`, with cumulative and explicit defaults, which the periodic reader asks. `InMemoryMetricExporter` and `OtlpHttpExporterBuilder` can set both.
 
 ### Changed
 - **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
 - **`OtlpHttpExporterBuilder::with_endpoint` and `with_url` resolve the URL when the exporter is built**, so they work whichever protocol is chosen, before or after them. `Protocol` has a third variant, `Grpc`, so a `match` on it needs an arm for it.
 - **The port 4317 warning says what to do:** set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or use port 4318. It's given only for OTLP over HTTP.
+- **`PointValue` has a new variant**, `ExponentialHistogram`, and `MetricFamily` a `temporality` field. Code matching on `PointValue` needs an arm for it.
 - **`oxtel-rmcp` now requires rmcp 3.** It moves from rmcp 1.6+ to 3.5+, because it wraps rmcp's own server and client types and so must use the same major version as your program. Upgrade rmcp to 3 together with oxtel-rmcp; programs still on rmcp 1 should stay on oxtel-rmcp 0.3 until then. A client notification that rmcp adds after 3.5 is recorded with `mcp.method.name` set to `_OTHER` until oxtel knows its name.
 - **The startup line names pull metrics plainly.** With `with_pull_metrics`, it now says metrics are `kept for the program to serve, e.g. at /metrics`, instead of `the program's own setup`, which it keeps for the program's own hooks.
 
