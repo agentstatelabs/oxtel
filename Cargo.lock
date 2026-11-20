@@ -1748,6 +1748,7 @@ dependencies = [
  "oxtel-prometheus",
  "oxtel-sdk",
  "oxtel-sql",
+ "serde_json",
  "sqlx 0.8.6",
  "sqlx 0.9.0",
  "tokio",

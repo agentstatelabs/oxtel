@@ -6,7 +6,7 @@ use std::net::TcpListener;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use oxtel_otlp::{OtlpHttpExporter, Protocol};
+use oxtel_otlp::{OtlpFileExporter, OtlpHttpExporter, Protocol};
 use oxtel_prometheus::PrometheusExporter;
 use oxtel_sdk::context::TraceFlags;
 use oxtel_sdk::logs::LoggerProvider;
@@ -523,4 +523,70 @@ fn metrics_in(protocol: Protocol) {
             .iter()
             .all(|e| e["traceId"] == trace_id.to_string())
     );
+}
+
+/// Spans, log records and metrics written as OTLP/JSON lines, one file per
+/// signal, read back by the Collector's `otlpjsonfile` receiver.
+#[test]
+#[ignore = "needs a running OpenTelemetry Collector; see conformance/README.md"]
+fn json_lines_reach_the_collector_intact() {
+    let run = run_id();
+    let dir = out_dir().join("in");
+    std::fs::create_dir_all(&dir).unwrap();
+    let file =
+        |signal: &str| OtlpFileExporter::file(dir.join(format!("{signal}-{run}.jsonl"))).unwrap();
+    let resource = Resource::builder()
+        .without_env()
+        .with_service_name("oxtel-conformance")
+        .with_attribute(KeyValue::new("test.run", run.clone()))
+        .build();
+    let traces = TracerProvider::builder()
+        .with_resource(resource.clone())
+        .with_sampler(Sampler::AlwaysOn)
+        .with_span_events(false)
+        .with_simple_exporter(file("traces"))
+        .build();
+    let logs = LoggerProvider::builder()
+        .with_resource(resource.clone())
+        .with_simple_exporter(file("logs"))
+        .build();
+    let meters = MeterProvider::builder()
+        .with_resource(resource)
+        .with_periodic_exporter(file("metrics"))
+        .build();
+    let subscriber = tracing_subscriber::registry()
+        .with(traces.layer())
+        .with(logs.layer());
+    let cx = tracing::subscriber::with_default(subscriber, || {
+        metrics::with_local_recorder(&meters.recorder(), || {
+            let span = tracing::info_span!("checkout", order.id = 7);
+            span.in_scope(|| {
+                tracing::warn!(attempt = 2, "payment slow");
+                metrics::counter!("orders.placed").increment(3);
+            });
+            span_context(&span).unwrap()
+        })
+    });
+    meters.force_flush().expect("flush");
+
+    let requests = lines_with("traces.json", &run, 1, Duration::from_secs(20));
+    let spans = spans_named(&requests, "checkout");
+    let span = spans.first().expect("the span");
+    assert_eq!(span["traceId"], cx.trace_id.to_string());
+    assert_eq!(attr(&span["attributes"], "order.id")["intValue"], "7");
+
+    let requests = lines_with("logs.json", &run, 1, Duration::from_secs(20));
+    let records = log_records(&requests);
+    let (_, record) = records
+        .iter()
+        .find(|(_, r)| r["body"]["stringValue"] == "payment slow")
+        .expect("the log record");
+    assert_eq!(record["traceId"], cx.trace_id.to_string());
+    assert_eq!(attr(&record["attributes"], "attempt")["intValue"], "2");
+
+    let batches = lines_with("metrics.json", &run, 1, Duration::from_secs(20));
+    let orders = metrics_named(&batches, "orders.placed");
+    let sum = &orders.first().expect("the metric")["sum"];
+    assert_eq!(sum["dataPoints"][0]["asInt"], "3");
+    assert_eq!(sum["isMonotonic"], true);
 }

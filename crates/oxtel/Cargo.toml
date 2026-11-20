@@ -38,6 +38,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
 
 [dev-dependencies]
 log = "0.4.34"
+serde_json = "1"
 # The sqlx mapping and oxtel-sql's sqlx wrapper together.
 oxtel-sql = { path = "../oxtel-sql", features = ["sqlx-0.8", "sqlx-0.9"] }
 # The sqlx mapping is checked against each sqlx it supports.
