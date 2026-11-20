@@ -6,7 +6,12 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`oxtel-reqwest`, a new crate: HTTP client spans and metrics for reqwest 0.13.** `oxtel_reqwest::client(reqwest::Client::new())` wraps a client in reqwest-middleware's `ClientWithMiddleware`, whose methods are reqwest's own, so call sites don't change. Every request gets a client span named for its method, W3C trace context in its headers, and `http.client.request.duration`, as oxtel-tower's client layer records them. A request that gets no response is an error, with `error.type` saying why: `timeout`, `connect`, `redirect`, `body`, `decode` or `request`. The query string and URL credentials are never recorded. With other middleware, add `oxtel_reqwest::HttpClientMiddleware` among them.
+- **`oxtel_tower::ClientCall`**, for instrumenting an HTTP client that isn't a tower service: it records a request as `HttpClientLayer` does.
+
 ### Changed
+- **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
 - **`oxtel-rmcp` now requires rmcp 3.** It moves from rmcp 1.6+ to 3.5+, because it wraps rmcp's own server and client types and so must use the same major version as your program. Upgrade rmcp to 3 together with oxtel-rmcp; programs still on rmcp 1 should stay on oxtel-rmcp 0.3 until then. A client notification that rmcp adds after 3.5 is recorded with `mcp.method.name` set to `_OTHER` until oxtel knows its name.
 - **The startup line names pull metrics plainly.** With `with_pull_metrics`, it now says metrics are `kept for the program to serve, e.g. at /metrics`, instead of `the program's own setup`, which it keeps for the program's own hooks.
 
