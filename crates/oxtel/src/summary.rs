@@ -40,6 +40,9 @@ pub(crate) enum Dest {
     Prometheus(SocketAddr),
     /// Whatever the program's own hooks set up.
     Program,
+    /// Metrics kept for the program to serve itself, from
+    /// [`Builder::with_pull_metrics`](crate::Builder::with_pull_metrics).
+    Pull,
 }
 
 impl Dest {
@@ -69,6 +72,7 @@ impl Dest {
                 format!("a Prometheus scrape endpoint at http://{addr}/metrics")
             }
             Dest::Program => "the program's own setup".into(),
+            Dest::Pull => "kept for the program to serve, e.g. at /metrics".into(),
         }
     }
 }
@@ -203,6 +207,34 @@ mod tests {
         assert_eq!(
             summary.line(),
             "log lines: standard output, as ECS JSON; everything else: off (OTEL_SDK_DISABLED is true)"
+        );
+    }
+
+    #[test]
+    fn pull_metrics_are_named_apart_from_hooks() {
+        let summary = Summary {
+            local: Some("standard error, as JSON".into()),
+            metrics: vec![Dest::Pull],
+            ..Summary::default()
+        };
+        assert_eq!(
+            summary.line(),
+            "log lines: standard error, as JSON; \
+             metrics: kept for the program to serve, e.g. at /metrics; \
+             traces and logs: not exported"
+        );
+        let summary = Summary {
+            local: Some("standard error, as JSON".into()),
+            traces: vec![Dest::Program],
+            metrics: vec![Dest::Program, Dest::Pull],
+            ..Summary::default()
+        };
+        assert_eq!(
+            summary.line(),
+            "log lines: standard error, as JSON; \
+             traces: the program's own setup; \
+             metrics: the program's own setup and kept for the program to serve, e.g. at /metrics; \
+             logs: not exported"
         );
     }
 
