@@ -512,9 +512,14 @@ impl Builder {
             .flatten()
             .find(|d| d.uses_the_grpc_port());
         if let Some(Dest::Exporter(destination)) = grpc_port {
+            let fix = if crate::config::grpc_available() {
+                "set OTEL_EXPORTER_OTLP_PROTOCOL=grpc, or use port 4318 for OTLP over HTTP"
+            } else {
+                "OTLP over HTTP is usually on port 4318, and gRPC needs oxtel's `grpc` feature"
+            };
             warnings.push(format!(
-                "{destination} uses port 4317, where collectors take OTLP over gRPC, which oxtel \
-                 doesn't speak yet; OTLP over HTTP is usually on port 4318"
+                "{destination} sends OTLP over HTTP to port 4317, where collectors take OTLP \
+                 over gRPC; {fix}"
             ));
         }
 

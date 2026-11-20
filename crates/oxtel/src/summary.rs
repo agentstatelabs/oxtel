@@ -60,9 +60,11 @@ impl Dest {
         }
     }
 
-    /// Port 4317 is where collectors take OTLP over gRPC.
+    /// Sends OTLP over HTTP to port 4317, where collectors take OTLP over
+    /// gRPC.
     pub(crate) fn uses_the_grpc_port(&self) -> bool {
-        matches!(self, Dest::Exporter(d) if d.contains(":4317/") && d.contains("(OTLP"))
+        matches!(self, Dest::Exporter(d)
+            if d.contains(":4317/") && (d.ends_with("(OTLP)") || d.ends_with("(OTLP/JSON)")))
     }
 
     fn describe(&self) -> String {
@@ -243,5 +245,9 @@ mod tests {
         assert!(Dest::Exporter("http://c:4317/v1/traces (OTLP)".into()).uses_the_grpc_port());
         assert!(!otlp("/v1/traces").uses_the_grpc_port());
         assert!(!Dest::Exporter("standard output".into()).uses_the_grpc_port());
+        assert!(
+            !Dest::Exporter("http://c:4317/ (OTLP/gRPC)".into()).uses_the_grpc_port(),
+            "gRPC belongs there"
+        );
     }
 }

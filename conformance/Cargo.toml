@@ -10,7 +10,7 @@ publish = false
 
 [dev-dependencies]
 oxtel-sdk = { path = "../crates/oxtel-sdk" }
-oxtel-otlp = { path = "../crates/oxtel-otlp" }
+oxtel-otlp = { path = "../crates/oxtel-otlp", features = ["grpc"] }
 oxtel-prometheus = { path = "../crates/oxtel-prometheus" }
 metrics = "0.24"
 serde_json = "1"

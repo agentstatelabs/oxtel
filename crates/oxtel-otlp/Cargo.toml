@@ -1,6 +1,6 @@
 [package]
 name = "oxtel-otlp"
-description = "OTLP/HTTP export for oxtel, with protobuf or JSON bodies"
+description = "OTLP export for oxtel: over HTTP with protobuf or JSON bodies, over gRPC, or as JSON lines"
 readme = "../../README.md"
 keywords = ["opentelemetry", "otlp", "tracing", "exporter", "telemetry"]
 categories = ["development-tools::debugging", "development-tools::profiling"]
@@ -17,6 +17,9 @@ include = ["src/**", "proto/**", "Cargo.toml", "LICENSE"]
 default = ["http-proto"]
 # OTLP over HTTP with protobuf bodies: an HTTP client with rustls, and gzip.
 http-proto = ["dep:ureq", "dep:flate2"]
+# OTLP over gRPC as well: tonic's HTTP/2 client with rustls, run on a small
+# tokio runtime of the exporter's own.
+grpc = ["http-proto", "dep:tonic", "dep:tokio", "dep:bytes", "dep:http"]
 
 [dependencies]
 oxtel-sdk = { path = "../oxtel-sdk", version = "0.3.1" }
@@ -24,8 +27,21 @@ prost = "0.14"
 fastrand = "2.4"
 flate2 = { version = "1.1", optional = true }
 ureq = { version = "3.4", default-features = false, features = ["rustls"], optional = true }
+bytes = { version = "1", optional = true }
+http = { version = "1.4", optional = true }
+tokio = { version = "1.45", default-features = false, features = ["rt-multi-thread", "time", "sync"], optional = true }
+tonic = { version = "0.14", default-features = false, features = ["channel", "gzip", "tls-ring", "tls-webpki-roots"], optional = true }
 
 [dev-dependencies]
+# A TLS receiver for the tests, with certificates made on the spot.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "pem", "ring"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# A gRPC receiver for the tests, with the `grpc` feature.
+bytes = "1"
+http = "1.4"
+tokio = { version = "1.45", features = ["macros", "rt-multi-thread", "net"] }
+tonic = { version = "0.14", default-features = false, features = ["server", "tls-ring", "gzip"] }
+tower-service = "0.3"
 metrics = "0.24"
 serde_json = "1"
 tracing = "0.1.44"

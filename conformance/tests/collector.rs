@@ -20,6 +20,18 @@ fn otlp_base() -> String {
     std::env::var("OXTEL_COLLECTOR_OTLP").unwrap_or_else(|_| "http://localhost:4318".into())
 }
 
+fn otlp_grpc() -> String {
+    std::env::var("OXTEL_COLLECTOR_OTLP_GRPC").unwrap_or_else(|_| "http://localhost:4317".into())
+}
+
+/// Where the Collector takes OTLP in `protocol`.
+fn endpoint(protocol: Protocol) -> String {
+    match protocol {
+        Protocol::Grpc => otlp_grpc(),
+        _ => otlp_base(),
+    }
+}
+
 fn out_dir() -> PathBuf {
     std::env::var("OXTEL_COLLECTOR_OUT").map_or_else(
         |_| PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("out"),
@@ -83,6 +95,8 @@ fn traces_reach_the_collector_intact() {
         (true, Protocol::HttpProtobuf),
         (false, Protocol::HttpJson),
         (true, Protocol::HttpJson),
+        (false, Protocol::Grpc),
+        (true, Protocol::Grpc),
     ] {
         let run = run_id();
         let provider = TracerProvider::builder()
@@ -96,7 +110,7 @@ fn traces_reach_the_collector_intact() {
             .with_sampler(Sampler::AlwaysOn)
             .with_batch_exporter(
                 OtlpHttpExporter::builder()
-                    .with_endpoint(&otlp_base())
+                    .with_endpoint(&endpoint(protocol))
                     .with_gzip(gzip)
                     .with_protocol(protocol)
                     .build(),
@@ -212,6 +226,7 @@ fn log_records(requests: &[Value]) -> Vec<(&str, &Value)> {
 fn logs_reach_the_collector_intact() {
     logs_in(Protocol::HttpProtobuf);
     logs_in(Protocol::HttpJson);
+    logs_in(Protocol::Grpc);
 }
 
 fn logs_in(protocol: Protocol) {
@@ -231,7 +246,7 @@ fn logs_in(protocol: Protocol) {
         .with_resource(resource)
         .with_batch_exporter(
             OtlpHttpExporter::builder()
-                .with_endpoint(&otlp_base())
+                .with_endpoint(&endpoint(protocol))
                 .with_protocol(protocol)
                 .build(),
         )
@@ -424,6 +439,7 @@ fn the_collector_scrapes_openmetrics_with_exemplars() {
 fn metrics_reach_the_collector_over_otlp() {
     metrics_in(Protocol::HttpProtobuf);
     metrics_in(Protocol::HttpJson);
+    metrics_in(Protocol::Grpc);
 }
 
 fn metrics_in(protocol: Protocol) {
@@ -442,7 +458,7 @@ fn metrics_in(protocol: Protocol) {
         .with_exemplar_filter(ExemplarFilter::TraceBased)
         .with_periodic_exporter_config(
             OtlpHttpExporter::builder()
-                .with_endpoint(&otlp_base())
+                .with_endpoint(&endpoint(protocol))
                 .with_protocol(protocol)
                 .build(),
             PeriodicReaderConfig {

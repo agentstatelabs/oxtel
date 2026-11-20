@@ -40,6 +40,11 @@ jobs:
       - run: cargo clippy -p oxtel-rmcp --all-targets --features client
       - run: cargo test -p oxtel-rmcp --features client
       - run: cargo clippy -p oxtel-semconv --all-targets --features experimental
+      - run: cargo clippy -p oxtel-otlp --all-targets --features grpc
+      - name: OTLP over gRPC, plain and over mutual TLS
+        run: cargo test -p oxtel-otlp --features grpc
+      - run: cargo clippy -p oxtel --all-targets --features grpc
+      - run: cargo test -p oxtel --features grpc
       - run: cargo clippy -p oxtel-sql --all-targets --all-features
       - name: oxtel-sql against SQLite and a real PostgreSQL
         run: cargo test -p oxtel-sql --all-features

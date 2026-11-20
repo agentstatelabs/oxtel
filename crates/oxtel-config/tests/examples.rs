@@ -2,8 +2,8 @@
 //! gets.
 
 use oxtel_config::{
-    AttributeValue, Config, Error, ExporterConfig, OtlpFileConfig, OtlpHttpConfig, ProcessorConfig,
-    ReaderConfig, SamplerConfig, parse_with,
+    AttributeValue, Config, Error, ExporterConfig, OtlpFileConfig, OtlpGrpcConfig, OtlpHttpConfig,
+    ProcessorConfig, ReaderConfig, SamplerConfig, TlsConfig, parse_with,
 };
 
 fn fixture(name: &str) -> String {
@@ -207,8 +207,8 @@ tracer_provider:
   processors:
     - batch:
         exporter:
-          otlp_grpc:
-            endpoint: http://localhost:4317
+          zipkin:
+            endpoint: http://localhost:9411/api/v2/spans
     - simple:
         exporter:
           console:
@@ -245,7 +245,7 @@ unknown_top_level: 1
         }]
     );
     let w = parsed.warnings.join("\n");
-    for expected in ["otlp_grpc", "jaeger_remote", "views", "unknown_top_level"] {
+    for expected in ["zipkin", "jaeger_remote", "views", "unknown_top_level"] {
         assert!(w.contains(expected), "no warning about {expected}:\n{w}");
     }
 }
@@ -290,6 +290,64 @@ meter_provider:
     assert!(
         error.contains("output_stream") && error.contains("file://"),
         "{error}"
+    );
+}
+
+#[test]
+fn otlp_grpc_and_tls_files_are_read() {
+    let text = r#"
+file_format: "1.2"
+tracer_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_grpc:
+            endpoint: https://collector:4317
+            compression: gzip
+            headers_list: api-key=k
+            tls:
+              ca_file: /etc/otel/ca.pem
+              cert_file: /etc/otel/client.pem
+              key_file: /etc/otel/client.key
+logger_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_http:
+            endpoint: https://collector:4318/v1/logs
+            tls:
+              ca_file: /etc/otel/ca.pem
+"#;
+    let parsed = parse_with(text, &|_| None).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
+    let files = TlsConfig {
+        ca_file: Some("/etc/otel/ca.pem".into()),
+        cert_file: Some("/etc/otel/client.pem".into()),
+        key_file: Some("/etc/otel/client.key".into()),
+    };
+    assert_eq!(
+        parsed.config.tracer_provider.unwrap().processors[0],
+        ProcessorConfig::Batch {
+            exporter: ExporterConfig::OtlpGrpc(OtlpGrpcConfig {
+                endpoint: Some("https://collector:4317".into()),
+                headers: vec![],
+                headers_list: Some("api-key=k".into()),
+                gzip: true,
+                timeout_ms: None,
+                tls: files,
+            }),
+            schedule_delay_ms: None,
+            export_timeout_ms: None,
+            max_queue_size: None,
+            max_export_batch_size: None,
+        }
+    );
+    assert_eq!(
+        otlp(&parsed.config.logger_provider.unwrap().processors[0])
+            .tls
+            .ca_file
+            .as_deref(),
+        Some("/etc/otel/ca.pem")
     );
 }
 
