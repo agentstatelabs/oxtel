@@ -1,0 +1,3 @@
+2026-11-20T20:26:48.926831Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-20T20:26:48.926885Z  INFO logs: signed in user.id=42 plan=team
+2026-11-20T20:26:48.926922Z  WARN request{http.route=/orders order.id=7}: logs: payment provider slow; retrying attempt=2 trace_id=a27268e769446e342704bb817830416e span_id=b45867035629c748

@@ -68,6 +68,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: Each example builds with only the dependencies it documents
         run: cargo run -q -p xtask -- check-examples
+      - name: The examples still print what examples/output shows
+        run: cargo run -q -p xtask -- check-output
 
   msrv:
     runs-on: ubuntu-latest
