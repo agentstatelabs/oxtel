@@ -43,6 +43,12 @@ jobs:
       - run: cargo clippy -p oxtel-sql --all-targets --all-features
       - name: oxtel-sql against SQLite and a real PostgreSQL
         run: cargo test -p oxtel-sql --all-features
+      - name: oxtel-tokio with tokio's unstable metrics, which add the blocking pool
+        env:
+          RUSTFLAGS: --cfg tokio_unstable -D warnings
+        run: |
+          cargo clippy -p oxtel-tokio --all-targets
+          cargo test -p oxtel-tokio
       # oxtel without its default features: local logs only.
       - run: cargo clippy -p oxtel --no-default-features --all-targets
       - run: cargo test -p oxtel --no-default-features
