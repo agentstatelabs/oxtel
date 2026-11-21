@@ -1,0 +1,33 @@
+[package]
+name = "oxtel-reqwest"
+description = "HTTP client spans and metrics for reqwest, with the trace carried onward, following the OpenTelemetry semantic conventions"
+readme = "../../README.md"
+keywords = ["opentelemetry", "reqwest", "tracing", "http", "client"]
+categories = ["development-tools::debugging", "web-programming::http-client"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+oxtel-tower = { path = "../oxtel-tower", version = "0.3.1" }
+async-trait = "0.1.51"
+http = "1.4"
+# Only reqwest's types: the program's own reqwest chooses TLS and the rest.
+reqwest = { version = "0.13.1", default-features = false }
+reqwest-middleware = "0.5"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+
+[dev-dependencies]
+oxtel-sdk = { path = "../oxtel-sdk" }
+oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+metrics = "0.24"
+tokio = { version = "1", features = ["macros", "rt", "net"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
+
+[lints]
+workspace = true

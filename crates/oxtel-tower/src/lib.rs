@@ -6,7 +6,8 @@
 //!   `http.server.request.duration` and `http.server.active_requests`; an
 //!   access log.
 //! - [`HttpClientLayer`]: a span per request, trace context sent along, and
-//!   `http.client.request.duration`.
+//!   `http.client.request.duration`. [`ClientCall`] records the same for a
+//!   client that isn't a tower service.
 //! - [`MetricsService`]: Prometheus `/metrics` as a tower service, for an
 //!   axum router or a hyper server.
 //!
@@ -35,7 +36,7 @@ mod metrics_service;
 mod request;
 mod server;
 
-pub use client::{HttpClient, HttpClientLayer};
+pub use client::{ClientCall, ClientRequestInfo, HttpClient, HttpClientLayer};
 pub use metrics_service::MetricsService;
 pub use request::{RequestInfo, SpanName};
 pub use server::{HttpServer, HttpServerLayer};
