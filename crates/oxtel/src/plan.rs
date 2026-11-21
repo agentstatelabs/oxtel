@@ -21,11 +21,22 @@ pub(crate) type Otlp = oxtel_otlp::OtlpHttpExporter;
 #[derive(Clone)]
 pub(crate) enum Otlp {}
 
+#[cfg(feature = "otlp")]
+pub(crate) type OtlpFile = oxtel_otlp::OtlpFileExporter;
+
+/// Stands in for the OTLP file exporter when the `otlp` feature is off.
+/// Never constructed.
+#[cfg(not(feature = "otlp"))]
+#[derive(Clone)]
+pub(crate) enum OtlpFile {}
+
 /// Where a processor or reader sends its data.
 #[derive(Clone)]
 pub(crate) enum Sink {
     #[cfg_attr(not(feature = "otlp"), allow(dead_code))]
     Otlp(Otlp),
+    #[cfg_attr(not(feature = "otlp"), allow(dead_code))]
+    OtlpFile(OtlpFile),
     Console(ConsoleExporter),
 }
 
@@ -36,6 +47,10 @@ impl SpanExporter for Sink {
             Sink::Otlp(o) => SpanExporter::export(o, batch, resource),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => SpanExporter::export(f, batch, resource),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => SpanExporter::export(c, batch, resource),
         }
     }
@@ -46,6 +61,10 @@ impl SpanExporter for Sink {
             Sink::Otlp(o) => SpanExporter::destination(o),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => SpanExporter::destination(f),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => SpanExporter::destination(c),
         }
     }
@@ -58,6 +77,10 @@ impl LogExporter for Sink {
             Sink::Otlp(o) => LogExporter::export(o, batch, resource),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => LogExporter::export(f, batch, resource),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => LogExporter::export(c, batch, resource),
         }
     }
@@ -68,6 +91,10 @@ impl LogExporter for Sink {
             Sink::Otlp(o) => LogExporter::destination(o),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => LogExporter::destination(f),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => LogExporter::destination(c),
         }
     }
@@ -80,6 +107,10 @@ impl MetricExporter for Sink {
             Sink::Otlp(o) => MetricExporter::export(o, metrics, resource),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => MetricExporter::export(f, metrics, resource),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => MetricExporter::export(c, metrics, resource),
         }
     }
@@ -90,6 +121,10 @@ impl MetricExporter for Sink {
             Sink::Otlp(o) => MetricExporter::destination(o),
             #[cfg(not(feature = "otlp"))]
             Sink::Otlp(o) => match *o {},
+            #[cfg(feature = "otlp")]
+            Sink::OtlpFile(f) => MetricExporter::destination(f),
+            #[cfg(not(feature = "otlp"))]
+            Sink::OtlpFile(f) => match *f {},
             Sink::Console(c) => MetricExporter::destination(c),
         }
     }
@@ -285,9 +320,15 @@ impl Plan {
                 .unwrap_or(128),
         };
 
+        // File exporters writing to the same stream share it, so their
+        // lines never interleave.
+        let mut files = Vec::new();
         let mut sink = |e: &oxtel_config::ExporterConfig, signal: &'static str| match e {
             oxtel_config::ExporterConfig::Console => Some(Sink::Console(ConsoleExporter::stdout())),
             oxtel_config::ExporterConfig::OtlpHttp(o) => otlp_from_config(o, signal, &mut warnings),
+            oxtel_config::ExporterConfig::OtlpFile(o) => {
+                otlp_file_from_config(o, &mut files, &mut warnings)
+            }
         };
         let mut procs = |list: &[ProcessorConfig], signal, defaults: BatchConfig| -> Vec<Proc> {
             list.iter()
@@ -346,6 +387,9 @@ impl Plan {
                         }
                         oxtel_config::ExporterConfig::OtlpHttp(o) => {
                             otlp_from_config(o, "metrics", &mut warnings)
+                        }
+                        oxtel_config::ExporterConfig::OtlpFile(o) => {
+                            otlp_file_from_config(o, &mut files, &mut warnings)
                         }
                     };
                     if let Some(s) = exporter {
@@ -491,6 +535,41 @@ fn config_resource(
 }
 
 /// An OTLP exporter for one signal, as the configuration describes it.
+/// The OTLP file exporter a configuration names, or the one already made
+/// for the same stream.
+#[cfg(all(feature = "config", feature = "otlp"))]
+fn otlp_file_from_config(
+    o: &oxtel_config::OtlpFileConfig,
+    open: &mut Vec<(String, Sink)>,
+    warnings: &mut Vec<String>,
+) -> Option<Sink> {
+    let stream = o.output_stream.as_deref().unwrap_or("stdout");
+    if let Some((_, sink)) = open.iter().find(|(s, _)| s == stream) {
+        return Some(sink.clone());
+    }
+    match oxtel_otlp::OtlpFileExporter::from_output_stream(stream) {
+        Ok(exporter) => {
+            let sink = Sink::OtlpFile(exporter);
+            open.push((stream.to_string(), sink.clone()));
+            Some(sink)
+        }
+        Err(e) => {
+            warnings.push(format!("the OTLP file exporter {e}; ignored"));
+            None
+        }
+    }
+}
+
+#[cfg(all(feature = "config", not(feature = "otlp")))]
+fn otlp_file_from_config(
+    _: &oxtel_config::OtlpFileConfig,
+    _: &mut Vec<(String, Sink)>,
+    warnings: &mut Vec<String>,
+) -> Option<Sink> {
+    warnings.push("OTLP export needs oxtel's `otlp` feature; ignored".into());
+    None
+}
+
 #[cfg(all(feature = "config", feature = "otlp"))]
 fn otlp_from_config(
     o: &oxtel_config::OtlpHttpConfig,

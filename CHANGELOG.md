@@ -24,6 +24,10 @@ All notable changes to oxtel are recorded here. The format follows
   - The OpenTelemetry conventions define no tokio metrics, so these are named under `oxtel.`.
   - It records on a thread of its own, so it keeps going when the runtime is too busy to run anything else. `oxtel_tokio::Sampler` records on demand instead, and `with_name` labels each runtime of a program that has several.
   - It needs tokio 1.45 or later.
+- **OTLP/JSON lines to standard output or a file**, the specification's OTLP file exporter. Each export becomes one line of OTLP/JSON, the encoding OTLP/HTTP uses, so the Collector's `otlpjsonfile` receiver reads it back without loss; CI checks that it does, for every signal.
+  - In a configuration file: `otlp_file/development`, with `output_stream: stdout` (the default) or `file:///path/to/traces.jsonl`. Exporters naming the same stream share it, so lines never interleave. A file that can't be opened is a warning, and that exporter is left out.
+  - In code: `oxtel_otlp::OtlpFileExporter::stdout()` or `::file(path)`, for any pipeline. It needs no HTTP client, so it works without oxtel-otlp's `http-proto` feature.
+  - The startup line names it: `traces: /var/log/traces.jsonl (OTLP/JSON lines)`.
 
 ### Changed
 - **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.

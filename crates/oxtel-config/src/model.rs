@@ -78,8 +78,18 @@ pub struct Limits {
 pub enum ExporterConfig {
     /// `otlp_http`.
     OtlpHttp(OtlpHttpConfig),
+    /// `otlp_file/development`: OTLP/JSON lines.
+    OtlpFile(OtlpFileConfig),
     /// `console`.
     Console,
+}
+
+/// `otlp_file/development`.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct OtlpFileConfig {
+    /// `output_stream`: `stdout`, or `file://` and a path. `None` is
+    /// standard output.
+    pub output_stream: Option<String>,
 }
 
 /// `otlp_http`.
@@ -611,6 +621,26 @@ fn processors(
     Ok(out)
 }
 
+/// An OTLP exporter's metric settings, which oxtel doesn't support yet:
+/// warned about when set to anything but the defaults.
+fn metric_preferences(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<(), Error> {
+    match e.str("temporality_preference")?.as_deref() {
+        None | Some("cumulative") => {}
+        Some(other) => warnings.push(format!(
+            "`{}: {other}` isn't supported yet; metrics are cumulative",
+            e.sub("temporality_preference")
+        )),
+    }
+    match e.str("default_histogram_aggregation")?.as_deref() {
+        None | Some("explicit_bucket_histogram") => {}
+        Some(other) => warnings.push(format!(
+            "`{}: {other}` isn't supported yet; histograms use explicit buckets",
+            e.sub("default_histogram_aggregation")
+        )),
+    }
+    Ok(())
+}
+
 /// The `exporter` of a processor or reader; `None`, with a warning, if
 /// oxtel doesn't support it.
 fn exporter(
@@ -671,22 +701,27 @@ fn exporter(
                 }
                 tls.finish(warnings);
             }
-            match e.str("temporality_preference")?.as_deref() {
-                None | Some("cumulative") => {}
-                Some(other) => warnings.push(format!(
-                    "`{}: {other}` isn't supported yet; metrics are cumulative",
-                    e.sub("temporality_preference")
-                )),
-            }
-            match e.str("default_histogram_aggregation")?.as_deref() {
-                None | Some("explicit_bucket_histogram") => {}
-                Some(other) => warnings.push(format!(
-                    "`{}: {other}` isn't supported yet; histograms use explicit buckets",
-                    e.sub("default_histogram_aggregation")
-                )),
-            }
+            metric_preferences(&mut e, warnings)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpHttp(otlp)))
+        }
+        "otlp_file/development" => {
+            let mut e = Fields::of(body, &path)?;
+            let file = OtlpFileConfig {
+                output_stream: e.str("output_stream")?,
+            };
+            if let Some(stream) = &file.output_stream
+                && stream != "stdout"
+                && !stream.starts_with("file://")
+            {
+                return Err(invalid(
+                    &e.sub("output_stream"),
+                    "`stdout` or a `file://` path",
+                ));
+            }
+            metric_preferences(&mut e, warnings)?;
+            e.finish(warnings);
+            Ok(Some(ExporterConfig::OtlpFile(file)))
         }
         "console" => {
             Fields::of(body, &path)?.finish(warnings);

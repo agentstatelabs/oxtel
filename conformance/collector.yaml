@@ -11,6 +11,17 @@ receivers:
     protocols:
       http:
         endpoint: 0.0.0.0:4318
+  # OTLP/JSON lines, as oxtel's file exporter writes them: one file per
+  # signal, which the tests write under /out/in.
+  otlpjsonfile/traces:
+    include: [/out/in/traces-*.jsonl]
+    start_at: beginning
+  otlpjsonfile/metrics:
+    include: [/out/in/metrics-*.jsonl]
+    start_at: beginning
+  otlpjsonfile/logs:
+    include: [/out/in/logs-*.jsonl]
+    start_at: beginning
   prometheus:
     config:
       scrape_configs:
@@ -35,11 +46,11 @@ service:
   extensions: [health_check]
   pipelines:
     traces:
-      receivers: [otlp]
+      receivers: [otlp, otlpjsonfile/traces]
       exporters: [file/traces]
     metrics:
-      receivers: [prometheus, otlp]
+      receivers: [prometheus, otlp, otlpjsonfile/metrics]
       exporters: [file/metrics]
     logs:
-      receivers: [otlp]
+      receivers: [otlp, otlpjsonfile/logs]
       exporters: [file/logs]

@@ -432,6 +432,94 @@ meter_provider:
 }
 
 #[test]
+#[cfg(all(feature = "config", feature = "otlp"))]
+fn otlp_file_writes_each_signal_as_json_lines() {
+    if in_child() {
+        let guard = oxtel::init().unwrap();
+        assert!(
+            guard.summary().contains("(OTLP/JSON lines)"),
+            "{}",
+            guard.summary()
+        );
+        tracing::info_span!("request").in_scope(|| tracing::warn!(attempt = 2, "slow lookup"));
+        metrics::counter!("requests.handled").increment(1);
+        guard.shutdown().unwrap();
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("oxtel-jsonl-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = |signal: &str| dir.join(format!("{signal}.jsonl"));
+    let path = config_file(
+        "jsonl",
+        r#"
+file_format: "1.2"
+tracer_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_file/development:
+            output_stream: file://${TRACES}
+logger_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_file/development:
+            output_stream: file://${LOGS}
+meter_provider:
+  readers:
+    - periodic:
+        exporter:
+          otlp_file/development:
+            output_stream: file://${METRICS}
+"#,
+    );
+    let traces = file("traces").to_string_lossy().into_owned();
+    let logs = file("logs").to_string_lossy().into_owned();
+    let metrics = file("metrics").to_string_lossy().into_owned();
+    child(
+        "otlp_file_writes_each_signal_as_json_lines",
+        &[
+            ("OTEL_CONFIG_FILE", &path),
+            ("TRACES", &traces),
+            ("LOGS", &logs),
+            ("METRICS", &metrics),
+        ],
+    );
+    let _ = std::fs::remove_file(&path);
+    let read = |path: &str| -> Vec<serde_json::Value> {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("each line is JSON"))
+            .collect()
+    };
+    let (traces, logs, metrics) = (read(&traces), read(&logs), read(&metrics));
+    let _ = std::fs::remove_dir_all(&dir);
+    let span = &traces[0]["resourceSpans"][0]["scopeSpans"][0]["spans"][0];
+    assert_eq!(span["name"], "request");
+    // The first record is oxtel's own startup line.
+    let record = logs
+        .iter()
+        .flat_map(|request| request["resourceLogs"].as_array().into_iter().flatten())
+        .flat_map(|rl| rl["scopeLogs"].as_array().into_iter().flatten())
+        .flat_map(|sl| sl["logRecords"].as_array().into_iter().flatten())
+        .find(|record| record["body"]["stringValue"] == "slow lookup")
+        .expect("the program's log record");
+    assert_eq!(record["traceId"], span["traceId"]);
+    assert!(
+        metrics.iter().any(|request| {
+            request["resourceMetrics"][0]["scopeMetrics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .flat_map(|scope| scope["metrics"].as_array().into_iter().flatten())
+                .any(|metric| metric["name"] == "requests.handled")
+        }),
+        "{metrics:#?}"
+    );
+}
+
+#[test]
 #[cfg(feature = "config")]
 fn a_configuration_file_that_cant_be_read_is_an_error() {
     if in_child() {
