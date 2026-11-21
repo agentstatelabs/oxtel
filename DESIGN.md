@@ -67,7 +67,7 @@ Each follows the semantic conventions.
 | `oxtel-rmcp` | MCP server and client spans and `mcp.*.operation.duration`, per the MCP conventions. Context travels through `params._meta`. |
 | `oxtel-sql` | Database client spans and `db.client.*` metrics for rusqlite (through SQLite's own trace hooks, so call sites don't change), tokio-postgres (a wrapped client, since its prepared statements don't expose their SQL) and sqlx (a wrapped pool, for what [sqlx's own events](#mappings-telemetry-from-what-libraries-already-emit) don't say, such as failures). Spans are named by the query summary the conventions define (`SELECT users`). The query text is recorded with every literal replaced by `?`, as the conventions advise, so values never reach telemetry; it can be turned off. |
 | `oxtel-tokio` | tokio runtime metrics: workers, queue depth and blocking pool. |
-| `oxtel-genai` | Helpers that record GenAI token usage and operation duration per the GenAI conventions, with no message content by default. |
+| `oxtel-genai` | Helpers that record a span per model call, its duration and its token usage, per the GenAI conventions, for any model client. No message content is recorded. |
 
 ### Mappings: telemetry from what libraries already emit
 

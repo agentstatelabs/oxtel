@@ -78,6 +78,20 @@ pub const SECONDS_BUCKETS: [f64; 14] = [
 /// millisecond to seconds.
 pub const DB_SECONDS_BUCKETS: [f64; 9] = [0.001, 0.005, 0.01, 0.05, 0.1, 0.5, 1.0, 5.0, 10.0];
 
+/// Bucket bounds the GenAI conventions advise for a model call's duration
+/// and its streaming chunks' timing, which run from tens of milliseconds to
+/// over a minute.
+pub const GENAI_SECONDS_BUCKETS: [f64; 14] = [
+    0.01, 0.02, 0.04, 0.08, 0.16, 0.32, 0.64, 1.28, 2.56, 5.12, 10.24, 20.48, 40.96, 81.92,
+];
+
+/// Bucket bounds the GenAI conventions advise for the tokens one model call
+/// uses: powers of four, from 1 to about 67 million.
+pub const GENAI_TOKEN_BUCKETS: [f64; 14] = [
+    1.0, 4.0, 16.0, 64.0, 256.0, 1024.0, 4096.0, 16384.0, 65536.0, 262144.0, 1048576.0, 4194304.0,
+    16777216.0, 67108864.0,
+];
+
 /// The specification's default explicit bucket bounds.
 pub const DEFAULT_BUCKETS: [f64; 15] = [
     0.0, 5.0, 10.0, 25.0, 50.0, 75.0, 100.0, 250.0, 500.0, 750.0, 1000.0, 2500.0, 5000.0, 7500.0,
@@ -232,11 +246,21 @@ impl Store {
         if let Some((_, bounds)) = self.config.buckets.iter().find(|(n, _)| n == name) {
             return Arc::clone(bounds);
         }
-        match unit {
-            Some("s") if name == "db.client.operation.duration" => {
-                Arc::from(DB_SECONDS_BUCKETS.as_slice())
-            }
-            Some("s") => Arc::from(SECONDS_BUCKETS.as_slice()),
+        match (name, unit) {
+            ("db.client.operation.duration", Some("s")) => Arc::from(DB_SECONDS_BUCKETS.as_slice()),
+            (
+                "gen_ai.client.inference.duration"
+                | "gen_ai.client.operation.duration"
+                | "gen_ai.client.inference.time_to_first_chunk"
+                | "gen_ai.client.inference.time_per_output_chunk",
+                Some("s"),
+            ) => Arc::from(GENAI_SECONDS_BUCKETS.as_slice()),
+            (
+                "gen_ai.client.inference.operation.input_tokens"
+                | "gen_ai.client.inference.operation.output_tokens",
+                _,
+            ) => Arc::from(GENAI_TOKEN_BUCKETS.as_slice()),
+            (_, Some("s")) => Arc::from(SECONDS_BUCKETS.as_slice()),
             _ => Arc::from(DEFAULT_BUCKETS.as_slice()),
         }
     }

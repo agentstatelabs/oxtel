@@ -169,6 +169,40 @@ fn custom_buckets_apply_by_name_and_others_get_the_defaults() {
 }
 
 #[test]
+fn conventional_metrics_get_the_buckets_their_conventions_advise() {
+    use oxtel_sdk::metrics::{
+        DB_SECONDS_BUCKETS, GENAI_SECONDS_BUCKETS, GENAI_TOKEN_BUCKETS, SECONDS_BUCKETS,
+    };
+    let provider = MeterProvider::builder().build();
+    metrics::with_local_recorder(&provider.recorder(), || {
+        for name in [
+            "http.server.request.duration",
+            "db.client.operation.duration",
+            "gen_ai.client.inference.duration",
+        ] {
+            metrics::describe_histogram!(name, metrics::Unit::Seconds, "");
+            metrics::histogram!(name).record(0.5);
+        }
+        metrics::histogram!("gen_ai.client.inference.operation.input_tokens").record(300.0);
+    });
+    let families = provider.collect();
+    let bounds = |name| match &family(&families, name).points[0].value {
+        PointValue::Histogram(h) => h.bounds.to_vec(),
+        _ => panic!("{name} isn't a histogram"),
+    };
+    assert_eq!(bounds("http.server.request.duration"), SECONDS_BUCKETS);
+    assert_eq!(bounds("db.client.operation.duration"), DB_SECONDS_BUCKETS);
+    assert_eq!(
+        bounds("gen_ai.client.inference.duration"),
+        GENAI_SECONDS_BUCKETS
+    );
+    assert_eq!(
+        bounds("gen_ai.client.inference.operation.input_tokens"),
+        GENAI_TOKEN_BUCKETS
+    );
+}
+
+#[test]
 fn exemplars_link_measurements_to_sampled_spans_only() {
     let tracer = |sampler| {
         TracerProvider::builder()
