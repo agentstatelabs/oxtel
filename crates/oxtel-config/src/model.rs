@@ -80,6 +80,8 @@ pub enum ExporterConfig {
     OtlpHttp(OtlpHttpConfig),
     /// `otlp_file/development`: OTLP/JSON lines.
     OtlpFile(OtlpFileConfig),
+    /// `otlp_grpc`.
+    OtlpGrpc(OtlpGrpcConfig),
     /// `console`.
     Console,
 }
@@ -107,6 +109,36 @@ pub struct OtlpHttpConfig {
     pub timeout_ms: Option<u64>,
     /// `encoding`: `json` instead of the default `protobuf`.
     pub json: bool,
+    /// `tls`: the files that verify the receiver and identify the client.
+    pub tls: TlsConfig,
+}
+
+/// `otlp_grpc`.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct OtlpGrpcConfig {
+    /// `endpoint`, used as is, such as `http://localhost:4317`.
+    pub endpoint: Option<String>,
+    /// `headers`.
+    pub headers: Vec<(String, String)>,
+    /// `headers_list`: `key=value,...`. `headers` win over it.
+    pub headers_list: Option<String>,
+    /// `compression`: `gzip` or `none`.
+    pub gzip: bool,
+    /// `timeout`, in milliseconds.
+    pub timeout_ms: Option<u64>,
+    /// `tls`: the files that verify the receiver and identify the client.
+    pub tls: TlsConfig,
+}
+
+/// An OTLP exporter's `tls`: PEM files.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct TlsConfig {
+    /// `ca_file`: the certificates that may sign the receiver's.
+    pub ca_file: Option<String>,
+    /// `cert_file`: the client certificate, for mutual TLS.
+    pub cert_file: Option<String>,
+    /// `key_file`: the client certificate's key.
+    pub key_file: Option<String>,
 }
 
 /// A span or log record processor.
@@ -621,6 +653,56 @@ fn processors(
     Ok(out)
 }
 
+/// An OTLP exporter's `headers`.
+fn headers(
+    e: &mut Fields<'_>,
+    path: &str,
+    warnings: &mut Vec<String>,
+) -> Result<Vec<(String, String)>, Error> {
+    let mut headers = Vec::new();
+    for (i, item) in e.list("headers")?.iter().enumerate() {
+        let hp = format!("{path}.headers[{i}]");
+        let mut h = Fields::of(item, &hp)?;
+        let name = h.str("name")?.ok_or_else(|| invalid(&hp, "a name"))?;
+        let value = h.str("value")?.unwrap_or_default();
+        headers.push((name, value));
+        h.finish(warnings);
+    }
+    Ok(headers)
+}
+
+/// Whether an OTLP exporter's `compression` is `gzip`.
+fn gzip(e: &mut Fields<'_>) -> Result<bool, Error> {
+    match e.str("compression")?.as_deref() {
+        None | Some("none") => Ok(false),
+        Some("gzip") => Ok(true),
+        Some(other) => Err(invalid(
+            &e.sub("compression"),
+            &format!("gzip or none, not `{other}`"),
+        )),
+    }
+}
+
+/// An OTLP exporter's `tls`.
+fn tls(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<TlsConfig, Error> {
+    let Some(mut t) = e.map("tls")? else {
+        return Ok(TlsConfig::default());
+    };
+    let tls = TlsConfig {
+        ca_file: t.str("ca_file")?,
+        cert_file: t.str("cert_file")?,
+        key_file: t.str("key_file")?,
+    };
+    if t.get("insecure").is_some() {
+        warnings.push(format!(
+            "`{}` isn't supported; the endpoint's scheme says whether to use TLS",
+            t.sub("insecure")
+        ));
+    }
+    t.finish(warnings);
+    Ok(tls)
+}
+
 /// An OTLP exporter's metric settings, which oxtel doesn't support yet:
 /// warned about when set to anything but the defaults.
 fn metric_preferences(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<(), Error> {
@@ -662,24 +744,8 @@ fn exporter(
                 timeout_ms: e.uint("timeout")?,
                 ..OtlpHttpConfig::default()
             };
-            for (i, item) in e.list("headers")?.iter().enumerate() {
-                let hp = format!("{path}.headers[{i}]");
-                let mut h = Fields::of(item, &hp)?;
-                let name = h.str("name")?.ok_or_else(|| invalid(&hp, "a name"))?;
-                let value = h.str("value")?.unwrap_or_default();
-                otlp.headers.push((name, value));
-                h.finish(warnings);
-            }
-            match e.str("compression")?.as_deref() {
-                None | Some("none") => {}
-                Some("gzip") => otlp.gzip = true,
-                Some(other) => {
-                    return Err(invalid(
-                        &e.sub("compression"),
-                        &format!("gzip or none, not `{other}`"),
-                    ));
-                }
-            }
+            otlp.headers = headers(&mut e, &path, warnings)?;
+            otlp.gzip = gzip(&mut e)?;
             match e.str("encoding")?.as_deref() {
                 None | Some("protobuf") => {}
                 Some("json") => otlp.json = true,
@@ -690,17 +756,7 @@ fn exporter(
                     ));
                 }
             }
-            if let Some(mut tls) = e.map("tls")? {
-                for key in ["ca_file", "key_file", "cert_file"] {
-                    if tls.get(key).is_some() {
-                        warnings.push(format!(
-                            "`{}` isn't supported yet; the system's roots are used",
-                            tls.sub(key)
-                        ));
-                    }
-                }
-                tls.finish(warnings);
-            }
+            otlp.tls = tls(&mut e, warnings)?;
             metric_preferences(&mut e, warnings)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpHttp(otlp)))
@@ -722,6 +778,21 @@ fn exporter(
             metric_preferences(&mut e, warnings)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpFile(file)))
+        }
+        "otlp_grpc" => {
+            let mut e = Fields::of(body, &path)?;
+            let mut otlp = OtlpGrpcConfig {
+                endpoint: e.str("endpoint")?,
+                headers_list: e.str("headers_list")?,
+                timeout_ms: e.uint("timeout")?,
+                ..OtlpGrpcConfig::default()
+            };
+            otlp.headers = headers(&mut e, &path, warnings)?;
+            otlp.gzip = gzip(&mut e)?;
+            otlp.tls = tls(&mut e, warnings)?;
+            metric_preferences(&mut e, warnings)?;
+            e.finish(warnings);
+            Ok(Some(ExporterConfig::OtlpGrpc(otlp)))
         }
         "console" => {
             Fields::of(body, &path)?.finish(warnings);

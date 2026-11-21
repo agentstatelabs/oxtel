@@ -205,6 +205,37 @@ fn otlp_from_env() -> Option<Otlp> {
     None
 }
 
+/// Warnings for the signals OTLP can't send at all, such as for a TLS file
+/// that can't be read: once per cause, naming the signals.
+#[cfg(feature = "otlp")]
+fn setup_errors(otlp: &Otlp, env: &EnvConfig, warnings: &mut Vec<String>) {
+    use oxtel_otlp::Signal;
+    let mut causes: Vec<(&str, Vec<&str>)> = Vec::new();
+    for (signal, exporters) in [
+        (Signal::Traces, &env.traces),
+        (Signal::Metrics, &env.metrics),
+        (Signal::Logs, &env.logs),
+    ] {
+        if !exporters.contains(&Exporter::Otlp) {
+            continue;
+        }
+        if let Some(why) = otlp.setup_error(signal) {
+            match causes.iter_mut().find(|(cause, _)| *cause == why) {
+                Some((_, signals)) => signals.push(signal.name()),
+                None => causes.push((why, vec![signal.name()])),
+            }
+        }
+    }
+    for (why, signals) in causes {
+        let signals = match signals.as_slice() {
+            [one] => one.to_string(),
+            [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+            [] => continue,
+        };
+        warnings.push(format!("OTLP {signals}: {why}; they won't be sent"));
+    }
+}
+
 impl Plan {
     /// The plan the `OTEL_*` variables describe.
     pub(crate) fn from_env(
@@ -224,6 +255,10 @@ impl Plan {
         let otlp = if wants_otlp { otlp_from_env() } else { None };
         if wants_otlp && otlp.is_none() {
             warnings.push("OTLP export needs oxtel's `otlp` feature; ignored".into());
+        }
+        #[cfg(feature = "otlp")]
+        if let Some(otlp) = &otlp {
+            setup_errors(otlp, &env, &mut warnings);
         }
         let console = Sink::Console(ConsoleExporter::stdout());
         let sink = |e: &Exporter| match e {
@@ -325,7 +360,12 @@ impl Plan {
         let mut files = Vec::new();
         let mut sink = |e: &oxtel_config::ExporterConfig, signal: &'static str| match e {
             oxtel_config::ExporterConfig::Console => Some(Sink::Console(ConsoleExporter::stdout())),
-            oxtel_config::ExporterConfig::OtlpHttp(o) => otlp_from_config(o, signal, &mut warnings),
+            oxtel_config::ExporterConfig::OtlpHttp(o) => {
+                otlp_from_config(&OtlpSettings::http(o), signal, &mut warnings)
+            }
+            oxtel_config::ExporterConfig::OtlpGrpc(o) => {
+                otlp_from_config(&OtlpSettings::grpc(o), signal, &mut warnings)
+            }
             oxtel_config::ExporterConfig::OtlpFile(o) => {
                 otlp_file_from_config(o, &mut files, &mut warnings)
             }
@@ -386,7 +426,10 @@ impl Plan {
                             Some(Sink::Console(ConsoleExporter::stdout()))
                         }
                         oxtel_config::ExporterConfig::OtlpHttp(o) => {
-                            otlp_from_config(o, "metrics", &mut warnings)
+                            otlp_from_config(&OtlpSettings::http(o), "metrics", &mut warnings)
+                        }
+                        oxtel_config::ExporterConfig::OtlpGrpc(o) => {
+                            otlp_from_config(&OtlpSettings::grpc(o), "metrics", &mut warnings)
                         }
                         oxtel_config::ExporterConfig::OtlpFile(o) => {
                             otlp_file_from_config(o, &mut files, &mut warnings)
@@ -534,7 +577,6 @@ fn config_resource(
     programmed.resource(b, extra)
 }
 
-/// An OTLP exporter for one signal, as the configuration describes it.
 /// The OTLP file exporter a configuration names, or the one already made
 /// for the same stream.
 #[cfg(all(feature = "config", feature = "otlp"))]
@@ -570,51 +612,107 @@ fn otlp_file_from_config(
     None
 }
 
+/// What an `otlp_http` or `otlp_grpc` exporter in a configuration file
+/// says.
+#[cfg(feature = "config")]
+#[cfg_attr(not(feature = "otlp"), allow(dead_code))]
+pub(crate) struct OtlpSettings<'a> {
+    endpoint: Option<&'a str>,
+    headers: &'a [(String, String)],
+    headers_list: Option<&'a str>,
+    gzip: bool,
+    timeout_ms: Option<u64>,
+    tls: &'a oxtel_config::TlsConfig,
+    /// `http/protobuf`, `http/json` or `grpc`.
+    protocol: &'static str,
+}
+
+#[cfg(feature = "config")]
+impl<'a> OtlpSettings<'a> {
+    fn http(o: &'a oxtel_config::OtlpHttpConfig) -> Self {
+        OtlpSettings {
+            endpoint: o.endpoint.as_deref(),
+            headers: &o.headers,
+            headers_list: o.headers_list.as_deref(),
+            gzip: o.gzip,
+            timeout_ms: o.timeout_ms,
+            tls: &o.tls,
+            protocol: if o.json { "http/json" } else { "http/protobuf" },
+        }
+    }
+
+    fn grpc(o: &'a oxtel_config::OtlpGrpcConfig) -> Self {
+        OtlpSettings {
+            endpoint: o.endpoint.as_deref(),
+            headers: &o.headers,
+            headers_list: o.headers_list.as_deref(),
+            gzip: o.gzip,
+            timeout_ms: o.timeout_ms,
+            tls: &o.tls,
+            protocol: "grpc",
+        }
+    }
+}
+
+/// An OTLP exporter for one signal, as the configuration describes it.
 #[cfg(all(feature = "config", feature = "otlp"))]
 fn otlp_from_config(
-    o: &oxtel_config::OtlpHttpConfig,
+    o: &OtlpSettings<'_>,
     signal: &'static str,
-    _warnings: &mut Vec<String>,
+    warnings: &mut Vec<String>,
 ) -> Option<Sink> {
-    use oxtel_otlp::{OtlpHttpExporterBuilder, Protocol, Signal, parse_headers};
+    use oxtel_otlp::{OtlpHttpExporterBuilder, Protocol, Signal, TlsFiles, parse_headers};
     let which = match signal {
         "traces" => Signal::Traces,
         "metrics" => Signal::Metrics,
         _ => Signal::Logs,
     };
-    let url = o
-        .endpoint
-        .clone()
-        .unwrap_or_else(|| format!("http://localhost:4318/v1/{signal}"));
+    let protocol = match o.protocol {
+        "http/json" => Protocol::HttpJson,
+        "grpc" => Protocol::Grpc,
+        _ => Protocol::HttpProtobuf,
+    };
+    let url = o.endpoint.map_or_else(
+        || match protocol {
+            Protocol::Grpc => "http://localhost:4317".to_string(),
+            _ => format!("http://localhost:4318/v1/{signal}"),
+        },
+        str::to_string,
+    );
     let mut b = OtlpHttpExporterBuilder::new()
+        .with_protocol(protocol)
         .with_url(which, url)
         .with_gzip(o.gzip)
-        .with_protocol(if o.json {
-            Protocol::HttpJson
-        } else {
-            Protocol::HttpProtobuf
-        });
+        .with_tls(
+            which,
+            TlsFiles {
+                certificate: o.tls.ca_file.as_ref().map(Into::into),
+                client_certificate: o.tls.cert_file.as_ref().map(Into::into),
+                client_key: o.tls.key_file.as_ref().map(Into::into),
+            },
+        );
     if let Some(ms) = o.timeout_ms.filter(|&ms| ms > 0) {
         b = b.with_timeout(std::time::Duration::from_millis(ms));
     }
-    let mut headers = o
-        .headers_list
-        .as_deref()
-        .map(parse_headers)
-        .unwrap_or_default();
-    for (name, value) in &o.headers {
+    let mut headers = o.headers_list.map(parse_headers).unwrap_or_default();
+    for (name, value) in o.headers {
         headers.retain(|(k, _)| !k.eq_ignore_ascii_case(name));
         headers.push((name.clone(), value.clone()));
     }
     for (name, value) in headers {
         b = b.with_header(name, value);
     }
-    Some(Sink::Otlp(b.build()))
+    let exporter = b.build();
+    if let Some(why) = exporter.setup_error(which) {
+        warnings.push(format!("OTLP {signal}: {why}; ignored"));
+        return None;
+    }
+    Some(Sink::Otlp(exporter))
 }
 
 #[cfg(all(feature = "config", not(feature = "otlp")))]
 fn otlp_from_config(
-    _: &oxtel_config::OtlpHttpConfig,
+    _: &OtlpSettings<'_>,
     _: &'static str,
     warnings: &mut Vec<String>,
 ) -> Option<Sink> {

@@ -272,13 +272,17 @@ fn the_grpc_port_gets_a_warning() {
             .with_shutdown_timeout(std::time::Duration::from_millis(100))
             .build()
             .expect("build");
+        let fix = if oxtel::otlp::Protocol::from_name("grpc").is_some() {
+            "set OTEL_EXPORTER_OTLP_PROTOCOL=grpc, or use port 4318 for OTLP over HTTP"
+        } else {
+            "OTLP over HTTP is usually on port 4318, and gRPC needs oxtel's `grpc` feature"
+        };
         assert_eq!(
             telemetry.warnings(),
-            [
-                "http://collector.invalid:4317/v1/traces (OTLP) uses port 4317, where collectors \
-              take OTLP over gRPC, which oxtel doesn't speak yet; OTLP over HTTP is usually on \
-              port 4318"
-            ]
+            [format!(
+                "http://collector.invalid:4317/v1/traces (OTLP) sends OTLP over HTTP to port \
+                 4317, where collectors take OTLP over gRPC; {fix}"
+            )]
         );
         return;
     }
