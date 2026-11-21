@@ -615,6 +615,7 @@ fn json_lines_reach_the_collector_intact() {
 fn delta_and_exponential_metrics_reach_the_collector() {
     delta_and_exponential_in(Protocol::HttpProtobuf);
     delta_and_exponential_in(Protocol::HttpJson);
+    delta_and_exponential_in(Protocol::Grpc);
 }
 
 fn delta_and_exponential_in(protocol: Protocol) {
@@ -630,7 +631,7 @@ fn delta_and_exponential_in(protocol: Protocol) {
         )
         .with_periodic_exporter_config(
             OtlpHttpExporter::builder()
-                .with_endpoint(&otlp_base())
+                .with_endpoint(&endpoint(protocol))
                 .with_protocol(protocol)
                 .with_temporality_preference(TemporalityPreference::Delta)
                 .with_histogram_aggregation(HistogramAggregation::EXPONENTIAL)

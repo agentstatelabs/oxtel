@@ -92,6 +92,13 @@ pub struct OtlpFileConfig {
     /// `output_stream`: `stdout`, or `file://` and a path. `None` is
     /// standard output.
     pub output_stream: Option<String>,
+    /// `temporality_preference`: `cumulative`, `delta` or `low_memory`.
+    /// `None` is cumulative.
+    pub temporality_preference: Option<String>,
+    /// `default_histogram_aggregation` is
+    /// `base2_exponential_bucket_histogram`, not the default
+    /// `explicit_bucket_histogram`.
+    pub exponential_histograms: bool,
 }
 
 /// `otlp_http`.
@@ -133,6 +140,13 @@ pub struct OtlpGrpcConfig {
     pub gzip: bool,
     /// `timeout`, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// `temporality_preference`: `cumulative`, `delta` or `low_memory`.
+    /// `None` is cumulative.
+    pub temporality_preference: Option<String>,
+    /// `default_histogram_aggregation` is
+    /// `base2_exponential_bucket_histogram`, not the default
+    /// `explicit_bucket_histogram`.
+    pub exponential_histograms: bool,
     /// `tls`: the files that verify the receiver and identify the client.
     pub tls: TlsConfig,
 }
@@ -197,6 +211,9 @@ pub struct TracerProviderConfig {
 
 /// A metric reader.
 #[derive(Clone, Debug, PartialEq)]
+// Read once at startup, so its size doesn't matter, and boxing the exporter
+// would keep callers from matching on it.
+#[allow(clippy::large_enum_variant)]
 pub enum ReaderConfig {
     /// `periodic`.
     Periodic {
@@ -775,24 +792,32 @@ fn tls(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<TlsConfig, Erro
     Ok(tls)
 }
 
-/// An OTLP exporter's metric settings, which oxtel doesn't support yet:
-/// warned about when set to anything but the defaults.
-fn metric_preferences(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<(), Error> {
-    match e.str("temporality_preference")?.as_deref() {
-        None | Some("cumulative") => {}
-        Some(other) => warnings.push(format!(
-            "`{}: {other}` isn't supported yet; metrics are cumulative",
-            e.sub("temporality_preference")
-        )),
-    }
-    match e.str("default_histogram_aggregation")?.as_deref() {
-        None | Some("explicit_bucket_histogram") => {}
-        Some(other) => warnings.push(format!(
-            "`{}: {other}` isn't supported yet; histograms use explicit buckets",
-            e.sub("default_histogram_aggregation")
-        )),
-    }
-    Ok(())
+/// An OTLP exporter's metric settings: its `temporality_preference`, and
+/// whether its `default_histogram_aggregation` is exponential.
+fn metric_preferences(e: &mut Fields<'_>) -> Result<(Option<String>, bool), Error> {
+    let temporality = match e.str("temporality_preference")?.as_deref() {
+        None => None,
+        Some(p @ ("cumulative" | "delta" | "low_memory" | "lowmemory")) => Some(p.to_string()),
+        Some(other) => {
+            return Err(invalid(
+                &e.sub("temporality_preference"),
+                &format!("cumulative, delta or low_memory, not `{other}`"),
+            ));
+        }
+    };
+    let exponential = match e.str("default_histogram_aggregation")?.as_deref() {
+        None | Some("explicit_bucket_histogram") => false,
+        Some("base2_exponential_bucket_histogram") => true,
+        Some(other) => {
+            return Err(invalid(
+                &e.sub("default_histogram_aggregation"),
+                &format!(
+                    "explicit_bucket_histogram or base2_exponential_bucket_histogram, not `{other}`"
+                ),
+            ));
+        }
+    };
+    Ok((temporality, exponential))
 }
 
 /// The `exporter` of a processor or reader; `None`, with a warning, if
@@ -829,37 +854,16 @@ fn exporter(
                 }
             }
             otlp.tls = tls(&mut e, warnings)?;
-            match e.str("temporality_preference")?.as_deref() {
-                None => {}
-                Some(p @ ("cumulative" | "delta" | "low_memory" | "lowmemory")) => {
-                    otlp.temporality_preference = Some(p.to_string());
-                }
-                Some(other) => {
-                    return Err(invalid(
-                        &e.sub("temporality_preference"),
-                        &format!("cumulative, delta or low_memory, not `{other}`"),
-                    ));
-                }
-            }
-            match e.str("default_histogram_aggregation")?.as_deref() {
-                None | Some("explicit_bucket_histogram") => {}
-                Some("base2_exponential_bucket_histogram") => otlp.exponential_histograms = true,
-                Some(other) => {
-                    return Err(invalid(
-                        &e.sub("default_histogram_aggregation"),
-                        &format!(
-                            "explicit_bucket_histogram or base2_exponential_bucket_histogram, not `{other}`"
-                        ),
-                    ));
-                }
-            }
+            (otlp.temporality_preference, otlp.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpHttp(otlp)))
         }
         "otlp_file/development" => {
             let mut e = Fields::of(body, &path)?;
-            let file = OtlpFileConfig {
+            let mut file = OtlpFileConfig {
                 output_stream: e.str("output_stream")?,
+                ..OtlpFileConfig::default()
             };
             if let Some(stream) = &file.output_stream
                 && stream != "stdout"
@@ -870,7 +874,8 @@ fn exporter(
                     "`stdout` or a `file://` path",
                 ));
             }
-            metric_preferences(&mut e, warnings)?;
+            (file.temporality_preference, file.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpFile(file)))
         }
@@ -885,7 +890,8 @@ fn exporter(
             otlp.headers = headers(&mut e, &path, warnings)?;
             otlp.gzip = gzip(&mut e)?;
             otlp.tls = tls(&mut e, warnings)?;
-            metric_preferences(&mut e, warnings)?;
+            (otlp.temporality_preference, otlp.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpGrpc(otlp)))
         }

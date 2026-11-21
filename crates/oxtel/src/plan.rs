@@ -704,20 +704,55 @@ fn otlp_file_from_config(
     warnings: &mut Vec<String>,
 ) -> Option<Sink> {
     let stream = o.output_stream.as_deref().unwrap_or("stdout");
-    if let Some((_, sink)) = open.iter().find(|(s, _)| s == stream) {
-        return Some(sink.clone());
-    }
-    match oxtel_otlp::OtlpFileExporter::from_output_stream(stream) {
-        Ok(exporter) => {
-            let sink = Sink::OtlpFile(exporter);
-            open.push((stream.to_string(), sink.clone()));
-            Some(sink)
-        }
-        Err(e) => {
-            warnings.push(format!("the OTLP file exporter {e}; ignored"));
-            None
-        }
-    }
+    let shared = open.iter().find_map(|(s, sink)| match sink {
+        Sink::OtlpFile(f) if s == stream => Some(f.clone()),
+        _ => None,
+    });
+    let exporter = match shared {
+        Some(exporter) => exporter,
+        None => match oxtel_otlp::OtlpFileExporter::from_output_stream(stream) {
+            Ok(exporter) => {
+                open.push((stream.to_string(), Sink::OtlpFile(exporter.clone())));
+                exporter
+            }
+            Err(e) => {
+                warnings.push(format!("the OTLP file exporter {e}; ignored"));
+                return None;
+            }
+        },
+    };
+    // Each exporter of a shared stream keeps its own metric settings.
+    let (temporality, histograms) = metric_settings(
+        o.temporality_preference.as_deref(),
+        o.exponential_histograms,
+    );
+    Some(Sink::OtlpFile(
+        exporter
+            .with_temporality_preference(temporality)
+            .with_histogram_aggregation(histograms),
+    ))
+}
+
+/// The temporality and histogram aggregation a configuration's
+/// `temporality_preference` and `default_histogram_aggregation` ask for.
+#[cfg(all(feature = "config", feature = "otlp"))]
+fn metric_settings(
+    temporality: Option<&str>,
+    exponential: bool,
+) -> (
+    oxtel_sdk::metrics::TemporalityPreference,
+    HistogramAggregation,
+) {
+    (
+        temporality
+            .and_then(oxtel_sdk::metrics::TemporalityPreference::from_name)
+            .unwrap_or_default(),
+        if exponential {
+            HistogramAggregation::EXPONENTIAL
+        } else {
+            HistogramAggregation::Explicit
+        },
+    )
 }
 
 #[cfg(all(feature = "config", not(feature = "otlp")))]
@@ -774,8 +809,8 @@ impl<'a> OtlpSettings<'a> {
             timeout_ms: o.timeout_ms,
             tls: &o.tls,
             protocol: "grpc",
-            temporality_preference: None,
-            exponential_histograms: false,
+            temporality_preference: o.temporality_preference.as_deref(),
+            exponential_histograms: o.exponential_histograms,
         }
     }
 }
@@ -805,6 +840,8 @@ fn otlp_from_config(
         },
         str::to_string,
     );
+    let (temporality, histograms) =
+        metric_settings(o.temporality_preference, o.exponential_histograms);
     let mut b = OtlpHttpExporterBuilder::new()
         .with_protocol(protocol)
         .with_url(which, url)
@@ -817,16 +854,8 @@ fn otlp_from_config(
                 client_key: o.tls.key_file.as_ref().map(Into::into),
             },
         )
-        .with_temporality_preference(
-            o.temporality_preference
-                .and_then(oxtel_sdk::metrics::TemporalityPreference::from_name)
-                .unwrap_or_default(),
-        )
-        .with_histogram_aggregation(if o.exponential_histograms {
-            HistogramAggregation::EXPONENTIAL
-        } else {
-            HistogramAggregation::Explicit
-        });
+        .with_temporality_preference(temporality)
+        .with_histogram_aggregation(histograms);
     if let Some(ms) = o.timeout_ms.filter(|&ms| ms > 0) {
         b = b.with_timeout(std::time::Duration::from_millis(ms));
     }

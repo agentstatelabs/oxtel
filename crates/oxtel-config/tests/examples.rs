@@ -265,13 +265,19 @@ meter_provider:
     - periodic:
         exporter:
           otlp_file/development:
+            temporality_preference: delta
+            default_histogram_aggregation: base2_exponential_bucket_histogram
 "#;
     let parsed = parse_with(text, &|_| None).unwrap();
     assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
     assert!(matches!(
         &parsed.config.tracer_provider.unwrap().processors[0],
         ProcessorConfig::Batch {
-            exporter: ExporterConfig::OtlpFile(OtlpFileConfig { output_stream: Some(s) }),
+            exporter: ExporterConfig::OtlpFile(OtlpFileConfig {
+                output_stream: Some(s),
+                temporality_preference: None,
+                exponential_histograms: false,
+            }),
             ..
         } if s == "file:///var/log/traces.jsonl"
     ));
@@ -279,10 +285,12 @@ meter_provider:
         &parsed.config.meter_provider.unwrap().readers[0],
         ReaderConfig::Periodic {
             exporter: ExporterConfig::OtlpFile(OtlpFileConfig {
-                output_stream: None
+                output_stream: None,
+                temporality_preference: Some(t),
+                exponential_histograms: true,
             }),
             ..
-        }
+        } if t == "delta"
     ));
 
     let bad = "file_format: \"1.2\"\ntracer_provider:\n  processors:\n    - simple:\n        exporter:\n          otlp_file/development:\n            output_stream: /var/log/traces.jsonl\n";
@@ -305,6 +313,7 @@ tracer_provider:
             endpoint: https://collector:4317
             compression: gzip
             headers_list: api-key=k
+            temporality_preference: low_memory
             tls:
               ca_file: /etc/otel/ca.pem
               cert_file: /etc/otel/client.pem
@@ -334,6 +343,8 @@ logger_provider:
                 headers_list: Some("api-key=k".into()),
                 gzip: true,
                 timeout_ms: None,
+                temporality_preference: Some("low_memory".into()),
+                exponential_histograms: false,
                 tls: files,
             }),
             schedule_delay_ms: None,

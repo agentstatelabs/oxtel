@@ -9,7 +9,10 @@ use std::sync::{Arc, Mutex};
 use oxtel_sdk::Resource;
 use oxtel_sdk::export::ExportError;
 use oxtel_sdk::logs::{LogExporter, LogRecord};
-use oxtel_sdk::metrics::{MetricExporter, MetricFamily};
+use oxtel_sdk::metrics::{
+    HistogramAggregation, MetricExporter, MetricFamily, MetricKind, Temporality,
+    TemporalityPreference,
+};
 use oxtel_sdk::trace::{SpanData, SpanExporter};
 
 use crate::json;
@@ -34,9 +37,16 @@ use crate::transform::{logs_request, metrics_request, traces_request};
 /// Clones share the output, so lines from several pipelines never
 /// interleave. Give each signal a file of its own: the `otlpjsonfile`
 /// receiver reads a file as one signal.
+///
+/// Metrics are cumulative, with histograms in explicit buckets, unless
+/// [`with_temporality_preference`](Self::with_temporality_preference) or
+/// [`with_histogram_aggregation`](Self::with_histogram_aggregation) say
+/// otherwise.
 #[derive(Clone, Debug)]
 pub struct OtlpFileExporter {
     out: Arc<Output>,
+    temporality: TemporalityPreference,
+    histograms: HistogramAggregation,
 }
 
 #[derive(Debug)]
@@ -48,9 +58,7 @@ enum Output {
 impl OtlpFileExporter {
     /// Lines on standard output.
     pub fn stdout() -> OtlpFileExporter {
-        OtlpFileExporter {
-            out: Arc::new(Output::Stdout),
-        }
+        OtlpFileExporter::to(Output::Stdout)
     }
 
     /// Lines appended to the file at `path`, which is created if it doesn't
@@ -58,12 +66,33 @@ impl OtlpFileExporter {
     pub fn file(path: impl AsRef<Path>) -> io::Result<OtlpFileExporter> {
         let path = path.as_ref();
         let file = OpenOptions::new().create(true).append(true).open(path)?;
-        Ok(OtlpFileExporter {
-            out: Arc::new(Output::File {
-                path: path.to_path_buf(),
-                file: Mutex::new(file),
-            }),
-        })
+        Ok(OtlpFileExporter::to(Output::File {
+            path: path.to_path_buf(),
+            file: Mutex::new(file),
+        }))
+    }
+
+    fn to(out: Output) -> OtlpFileExporter {
+        OtlpFileExporter {
+            out: Arc::new(out),
+            temporality: TemporalityPreference::default(),
+            histograms: HistogramAggregation::default(),
+        }
+    }
+
+    /// Export metrics with this temporality: cumulative, or deltas for
+    /// backends that prefer them. A clone made earlier, sharing the output,
+    /// keeps its own.
+    pub fn with_temporality_preference(mut self, preference: TemporalityPreference) -> Self {
+        self.temporality = preference;
+        self
+    }
+
+    /// Aggregate histograms this way for this exporter: in explicit
+    /// buckets, or exponential ones.
+    pub fn with_histogram_aggregation(mut self, aggregation: HistogramAggregation) -> Self {
+        self.histograms = aggregation;
+        self
     }
 
     /// The exporter a declarative configuration's `output_stream` names:
@@ -141,5 +170,72 @@ impl MetricExporter for OtlpFileExporter {
 
     fn destination(&self) -> String {
         self.describe()
+    }
+
+    fn temporality(&self, kind: MetricKind) -> Temporality {
+        self.temporality.temporality(kind)
+    }
+
+    fn histogram_aggregation(&self) -> HistogramAggregation {
+        self.histograms
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxtel_sdk::metrics::{MeterProvider, PeriodicReaderConfig};
+    use std::time::Duration;
+
+    #[test]
+    fn metrics_can_be_deltas_in_exponential_histograms() {
+        let path = std::env::temp_dir().join(format!(
+            "oxtel-file-exporter-{}-{:?}.jsonl",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_file(&path);
+        let exporter = OtlpFileExporter::file(&path)
+            .unwrap()
+            .with_temporality_preference(TemporalityPreference::Delta)
+            .with_histogram_aggregation(HistogramAggregation::EXPONENTIAL);
+        let cumulative = OtlpFileExporter::file(&path).unwrap();
+        assert_eq!(
+            MetricExporter::temporality(&cumulative, MetricKind::Counter),
+            Temporality::Cumulative,
+            "the defaults"
+        );
+        let meters = MeterProvider::builder()
+            .with_resource(Resource::builder().without_env().build())
+            .with_periodic_exporter_config(
+                exporter,
+                PeriodicReaderConfig {
+                    interval: Duration::from_secs(3600),
+                    timeout: Duration::from_secs(5),
+                },
+            )
+            .build();
+        for count in [5, 2] {
+            metrics::with_local_recorder(&meters.recorder(), || {
+                metrics::counter!("jobs.done").increment(count);
+                metrics::histogram!("job.size").record(count as f64);
+            });
+            meters.force_flush().unwrap();
+        }
+        let text = std::fs::read_to_string(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert!(lines[1].contains(r#""asInt":"2""#), "a delta: {}", lines[1]);
+        assert!(
+            lines[1].contains(r#""aggregationTemporality":1"#),
+            "{}",
+            lines[1]
+        );
+        assert!(
+            lines[1].contains(r#""exponentialHistogram""#),
+            "{}",
+            lines[1]
+        );
     }
 }

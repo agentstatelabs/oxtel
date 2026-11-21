@@ -45,14 +45,14 @@ All notable changes to oxtel are recorded here. The format follows
 - **Exponential histograms.** `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram` makes an OTLP exporter's histograms base-2 exponential: up to 160 buckets per sign, at the finest scale (up to 20) that holds the recorded range, rescaled as it grows, with zeros counted apart.
   - They're kept alongside the explicit buckets only when an exporter asks for them, so Prometheus scrapes are unchanged.
   - They work with delta temporality: deltas are exact across a change of scale.
-- **Both in a configuration file:** an OTLP exporter's `temporality_preference` and `default_histogram_aggregation`, which were warned about before.
+- **Both in a configuration file:** the `temporality_preference` and `default_histogram_aggregation` of an `otlp_http`, `otlp_grpc` or `otlp_file/development` exporter, which were warned about before. File exporters sharing a stream each keep their own.
 - **Views**, from a configuration file's `meter_provider.views` or `MeterProviderBuilder::with_view`.
   - A view selects instruments by name (with `*` and `?`), type, unit or meter name. The first view that selects an instrument applies.
   - It can rename the metric or change its description.
   - It can drop the metric, give it explicit buckets (with or without min and max), or make it an exponential histogram for every reader.
   - It can keep only some attributes, or all but some, and set its own series limit.
   - Observable instrument types select nothing, since the `metrics` facade has none, and a `sum` or `last_value` aggregation leaves an instrument as it is. Both are warnings.
-- `MetricExporter` has two new methods, `temporality` and `histogram_aggregation`, with cumulative and explicit defaults, which the periodic reader asks. `InMemoryMetricExporter` and `OtlpHttpExporterBuilder` can set both.
+- `MetricExporter` has two new methods, `temporality` and `histogram_aggregation`, with cumulative and explicit defaults, which the periodic reader asks. `InMemoryMetricExporter`, `OtlpHttpExporterBuilder` and `OtlpFileExporter` can set both.
 
 ### Changed
 - **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
