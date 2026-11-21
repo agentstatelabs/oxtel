@@ -24,14 +24,19 @@
 
 mod adder;
 mod data;
+mod exponential;
 mod export;
 mod provider;
 mod reader;
 mod store;
 mod units;
+mod view;
 
 pub use crate::export::{ExportError, ProcessorStats};
-pub use data::{Exemplar, HistogramPoint, MetricFamily, MetricKind, Point, PointValue};
+pub use data::{
+    Exemplar, ExponentialBuckets, ExponentialHistogramPoint, HistogramAggregation, HistogramPoint,
+    MetricFamily, MetricKind, Point, PointValue, Temporality, TemporalityPreference,
+};
 pub use export::{InMemoryMetricExporter, MetricExporter};
 pub use provider::{MeterProvider, MeterProviderBuilder};
 pub use reader::PeriodicReaderConfig;
@@ -40,3 +45,4 @@ pub use store::{
     GENAI_TOKEN_BUCKETS, MetricsRecorder, OVERFLOW_ATTRIBUTE, SECONDS_BUCKETS,
 };
 pub use units::ucum;
+pub use view::{AttributeKeys, View, ViewAggregation};

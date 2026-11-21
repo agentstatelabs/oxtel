@@ -157,6 +157,25 @@ impl EnvConfig {
         let traces = exporters(Signal::Traces);
         let metrics = exporters(Signal::Metrics);
         let logs = exporters(Signal::Logs);
+        if metrics.contains(&Exporter::Otlp) {
+            let var = "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE";
+            if let Some(p) = get(var)
+                && oxtel_sdk::metrics::TemporalityPreference::from_name(&p).is_none()
+            {
+                warnings.push(format!(
+                    "{var}={p} isn't cumulative, delta or lowmemory; using cumulative"
+                ));
+            }
+            let var = "OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION";
+            if let Some(a) = get(var)
+                && oxtel_sdk::metrics::HistogramAggregation::from_name(&a).is_none()
+            {
+                warnings.push(format!(
+                    "{var}={a} isn't explicit_bucket_histogram or \
+                     base2_exponential_bucket_histogram; using explicit_bucket_histogram"
+                ));
+            }
+        }
 
         let mut trace_context = false;
         let propagators = get("OTEL_PROPAGATORS").unwrap_or_else(|| "tracecontext,baggage".into());
@@ -318,6 +337,32 @@ mod tests {
         let c = config(&[("OTEL_LOGS_EXPORTER", "prometheus")]);
         assert!(c.logs.is_empty(), "prometheus is for metrics only");
         assert_eq!(c.warnings.len(), 1);
+    }
+
+    #[test]
+    fn metric_preferences_that_cant_be_read_are_reported() {
+        let c = config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+            ("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE", "Delta"),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION",
+                "base2_exponential_bucket_histogram",
+            ),
+        ]);
+        assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        let c = config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE",
+                "deltas",
+            ),
+            (
+                "OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION",
+                "exponential",
+            ),
+        ]);
+        assert_eq!(c.warnings.len(), 2, "{:?}", c.warnings);
+        assert!(c.warnings[0].contains("=deltas isn't cumulative, delta or lowmemory"));
     }
 
     #[test]

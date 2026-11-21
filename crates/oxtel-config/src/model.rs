@@ -92,6 +92,13 @@ pub struct OtlpFileConfig {
     /// `output_stream`: `stdout`, or `file://` and a path. `None` is
     /// standard output.
     pub output_stream: Option<String>,
+    /// `temporality_preference`: `cumulative`, `delta` or `low_memory`.
+    /// `None` is cumulative.
+    pub temporality_preference: Option<String>,
+    /// `default_histogram_aggregation` is
+    /// `base2_exponential_bucket_histogram`, not the default
+    /// `explicit_bucket_histogram`.
+    pub exponential_histograms: bool,
 }
 
 /// `otlp_http`.
@@ -109,6 +116,13 @@ pub struct OtlpHttpConfig {
     pub timeout_ms: Option<u64>,
     /// `encoding`: `json` instead of the default `protobuf`.
     pub json: bool,
+    /// `temporality_preference`: `cumulative`, `delta` or `low_memory`.
+    /// `None` is cumulative.
+    pub temporality_preference: Option<String>,
+    /// `default_histogram_aggregation` is
+    /// `base2_exponential_bucket_histogram`, not the default
+    /// `explicit_bucket_histogram`.
+    pub exponential_histograms: bool,
     /// `tls`: the files that verify the receiver and identify the client.
     pub tls: TlsConfig,
 }
@@ -126,6 +140,13 @@ pub struct OtlpGrpcConfig {
     pub gzip: bool,
     /// `timeout`, in milliseconds.
     pub timeout_ms: Option<u64>,
+    /// `temporality_preference`: `cumulative`, `delta` or `low_memory`.
+    /// `None` is cumulative.
+    pub temporality_preference: Option<String>,
+    /// `default_histogram_aggregation` is
+    /// `base2_exponential_bucket_histogram`, not the default
+    /// `explicit_bucket_histogram`.
+    pub exponential_histograms: bool,
     /// `tls`: the files that verify the receiver and identify the client.
     pub tls: TlsConfig,
 }
@@ -190,6 +211,9 @@ pub struct TracerProviderConfig {
 
 /// A metric reader.
 #[derive(Clone, Debug, PartialEq)]
+// Read once at startup, so its size doesn't matter, and boxing the exporter
+// would keep callers from matching on it.
+#[allow(clippy::large_enum_variant)]
 pub enum ReaderConfig {
     /// `periodic`.
     Periodic {
@@ -222,6 +246,62 @@ pub struct MeterProviderConfig {
     pub exemplar_filter: Option<String>,
     /// The smallest `cardinality_limits.default` of the readers.
     pub cardinality_limit: Option<usize>,
+    /// `views`, in order.
+    pub views: Vec<ViewConfig>,
+}
+
+/// One of `meter_provider.views`: its `selector` and its `stream`.
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct ViewConfig {
+    /// `selector.instrument_name`, which may have `*` and `?` wildcards.
+    pub instrument_name: Option<String>,
+    /// `selector.instrument_type`, such as `counter` or `histogram`.
+    pub instrument_type: Option<String>,
+    /// `selector.unit`.
+    pub unit: Option<String>,
+    /// `selector.meter_name`.
+    pub meter_name: Option<String>,
+    /// `stream.name`.
+    pub name: Option<String>,
+    /// `stream.description`.
+    pub description: Option<String>,
+    /// `stream.aggregation`.
+    pub aggregation: Option<AggregationConfig>,
+    /// `stream.attribute_keys.included`.
+    pub attributes_included: Option<Vec<String>>,
+    /// `stream.attribute_keys.excluded`.
+    pub attributes_excluded: Option<Vec<String>>,
+    /// `stream.aggregation_cardinality_limit`.
+    pub cardinality_limit: Option<usize>,
+}
+
+/// A view's `stream.aggregation`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum AggregationConfig {
+    /// `default`.
+    Default,
+    /// `drop`.
+    Drop,
+    /// `sum`.
+    Sum,
+    /// `last_value`.
+    LastValue,
+    /// `explicit_bucket_histogram`.
+    ExplicitBucketHistogram {
+        /// `boundaries`; the specification's defaults if `None`.
+        boundaries: Option<Vec<f64>>,
+        /// `record_min_max`; true if `None`.
+        record_min_max: Option<bool>,
+    },
+    /// `base2_exponential_bucket_histogram`.
+    Base2ExponentialBucketHistogram {
+        /// `max_scale`; 20 if `None`.
+        max_scale: Option<i64>,
+        /// `max_size`; 160 if `None`.
+        max_size: Option<u64>,
+        /// `record_min_max`; true if `None`.
+        record_min_max: Option<bool>,
+    },
 }
 
 /// `logger_provider`.
@@ -291,6 +371,15 @@ impl<'n> Fields<'n> {
             None => Ok(None),
             Some(Node::Int(i)) if *i >= 0 => Ok(Some(*i as u64)),
             Some(_) => Err(invalid(&path, "a non-negative integer")),
+        }
+    }
+
+    fn int(&mut self, key: &str) -> Result<Option<i64>, Error> {
+        let path = self.sub(key);
+        match self.get(key) {
+            None => Ok(None),
+            Some(Node::Int(i)) => Ok(Some(*i)),
+            Some(_) => Err(invalid(&path, "an integer")),
         }
     }
 
@@ -703,24 +792,32 @@ fn tls(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<TlsConfig, Erro
     Ok(tls)
 }
 
-/// An OTLP exporter's metric settings, which oxtel doesn't support yet:
-/// warned about when set to anything but the defaults.
-fn metric_preferences(e: &mut Fields<'_>, warnings: &mut Vec<String>) -> Result<(), Error> {
-    match e.str("temporality_preference")?.as_deref() {
-        None | Some("cumulative") => {}
-        Some(other) => warnings.push(format!(
-            "`{}: {other}` isn't supported yet; metrics are cumulative",
-            e.sub("temporality_preference")
-        )),
-    }
-    match e.str("default_histogram_aggregation")?.as_deref() {
-        None | Some("explicit_bucket_histogram") => {}
-        Some(other) => warnings.push(format!(
-            "`{}: {other}` isn't supported yet; histograms use explicit buckets",
-            e.sub("default_histogram_aggregation")
-        )),
-    }
-    Ok(())
+/// An OTLP exporter's metric settings: its `temporality_preference`, and
+/// whether its `default_histogram_aggregation` is exponential.
+fn metric_preferences(e: &mut Fields<'_>) -> Result<(Option<String>, bool), Error> {
+    let temporality = match e.str("temporality_preference")?.as_deref() {
+        None => None,
+        Some(p @ ("cumulative" | "delta" | "low_memory" | "lowmemory")) => Some(p.to_string()),
+        Some(other) => {
+            return Err(invalid(
+                &e.sub("temporality_preference"),
+                &format!("cumulative, delta or low_memory, not `{other}`"),
+            ));
+        }
+    };
+    let exponential = match e.str("default_histogram_aggregation")?.as_deref() {
+        None | Some("explicit_bucket_histogram") => false,
+        Some("base2_exponential_bucket_histogram") => true,
+        Some(other) => {
+            return Err(invalid(
+                &e.sub("default_histogram_aggregation"),
+                &format!(
+                    "explicit_bucket_histogram or base2_exponential_bucket_histogram, not `{other}`"
+                ),
+            ));
+        }
+    };
+    Ok((temporality, exponential))
 }
 
 /// The `exporter` of a processor or reader; `None`, with a warning, if
@@ -757,14 +854,16 @@ fn exporter(
                 }
             }
             otlp.tls = tls(&mut e, warnings)?;
-            metric_preferences(&mut e, warnings)?;
+            (otlp.temporality_preference, otlp.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpHttp(otlp)))
         }
         "otlp_file/development" => {
             let mut e = Fields::of(body, &path)?;
-            let file = OtlpFileConfig {
+            let mut file = OtlpFileConfig {
                 output_stream: e.str("output_stream")?,
+                ..OtlpFileConfig::default()
             };
             if let Some(stream) = &file.output_stream
                 && stream != "stdout"
@@ -775,7 +874,8 @@ fn exporter(
                     "`stdout` or a `file://` path",
                 ));
             }
-            metric_preferences(&mut e, warnings)?;
+            (file.temporality_preference, file.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpFile(file)))
         }
@@ -790,7 +890,8 @@ fn exporter(
             otlp.headers = headers(&mut e, &path, warnings)?;
             otlp.gzip = gzip(&mut e)?;
             otlp.tls = tls(&mut e, warnings)?;
-            metric_preferences(&mut e, warnings)?;
+            (otlp.temporality_preference, otlp.exponential_histograms) =
+                metric_preferences(&mut e)?;
             e.finish(warnings);
             Ok(Some(ExporterConfig::OtlpGrpc(otlp)))
         }
@@ -803,6 +904,100 @@ fn exporter(
             Ok(None)
         }
     }
+}
+
+/// One of `meter_provider.views`.
+fn view(mut f: Fields<'_>, warnings: &mut Vec<String>) -> Result<ViewConfig, Error> {
+    let mut v = ViewConfig::default();
+    if let Some(mut selector) = f.map("selector")? {
+        v.instrument_name = selector.str("instrument_name")?;
+        v.instrument_type = selector.str("instrument_type")?;
+        v.unit = selector.str("unit")?;
+        v.meter_name = selector.str("meter_name")?;
+        for key in ["meter_version", "meter_schema_url"] {
+            if selector.get(key).is_some() {
+                warnings.push(format!(
+                    "`{}` isn't supported: oxtel's meters have no version or schema; ignored",
+                    selector.sub(key)
+                ));
+            }
+        }
+        selector.finish(warnings);
+    }
+    if let Some(mut stream) = f.map("stream")? {
+        v.name = stream.str("name")?;
+        v.description = stream.str("description")?;
+        v.cardinality_limit = stream.usize("aggregation_cardinality_limit")?;
+        if let Some(mut keys) = stream.map("attribute_keys")? {
+            let strings =
+                |keys: &mut Fields<'_>, key: &str| -> Result<Option<Vec<String>>, Error> {
+                    let path = keys.sub(key);
+                    if keys.get(key).is_none() {
+                        return Ok(None);
+                    }
+                    keys.list(key)?
+                        .iter()
+                        .map(|n| string(n, &path))
+                        .collect::<Result<Vec<_>, _>>()
+                        .map(Some)
+                };
+            v.attributes_included = strings(&mut keys, "included")?;
+            v.attributes_excluded = strings(&mut keys, "excluded")?;
+            keys.finish(warnings);
+        }
+        if let Some(node) = stream.get("aggregation") {
+            let path = stream.sub("aggregation");
+            let (kind, body) = one_of(node, &path)?;
+            let mut a = Fields::of(body, &format!("{path}.{kind}"))?;
+            v.aggregation = Some(match kind {
+                "default" => AggregationConfig::Default,
+                "drop" => AggregationConfig::Drop,
+                "sum" => AggregationConfig::Sum,
+                "last_value" => AggregationConfig::LastValue,
+                "explicit_bucket_histogram" => {
+                    let bp = a.sub("boundaries");
+                    let boundaries = if a.get("boundaries").is_some() {
+                        Some(
+                            a.list("boundaries")?
+                                .iter()
+                                .map(|n| match n {
+                                    Node::Float(f) => Ok(*f),
+                                    Node::Int(i) => Ok(*i as f64),
+                                    _ => Err(invalid(&bp, "a list of numbers")),
+                                })
+                                .collect::<Result<Vec<_>, _>>()?,
+                        )
+                    } else {
+                        None
+                    };
+                    AggregationConfig::ExplicitBucketHistogram {
+                        boundaries,
+                        record_min_max: a.bool("record_min_max")?,
+                    }
+                }
+                "base2_exponential_bucket_histogram" => {
+                    AggregationConfig::Base2ExponentialBucketHistogram {
+                        max_scale: a.int("max_scale")?,
+                        max_size: a.uint("max_size")?,
+                        record_min_max: a.bool("record_min_max")?,
+                    }
+                }
+                other => {
+                    return Err(invalid(
+                        &path,
+                        &format!(
+                            "default, drop, sum, last_value, explicit_bucket_histogram or \
+                             base2_exponential_bucket_histogram, not `{other}`"
+                        ),
+                    ));
+                }
+            });
+            a.finish(warnings);
+        }
+        stream.finish(warnings);
+    }
+    f.finish(warnings);
+    Ok(v)
 }
 
 fn meter_provider(
@@ -862,8 +1057,9 @@ fn meter_provider(
         }
         r.finish(warnings);
     }
-    if f.get("views").is_some() {
-        warnings.push("`meter_provider.views` isn't supported yet; ignored".into());
+    for (i, item) in f.list("views")?.iter().enumerate() {
+        let path = format!("{}.views[{i}]", f.path);
+        m.views.push(view(Fields::of(item, &path)?, warnings)?);
     }
     f.finish(warnings);
     Ok(m)

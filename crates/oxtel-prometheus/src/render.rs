@@ -142,6 +142,9 @@ fn write_family(
                 format,
             ),
             PointValue::Gauge(v) => sample(out, name, &labels, None, &number(*v), None, format),
+            // The text formats have no exponential buckets, and the
+            // provider's collect, which a scrape reads, never makes them.
+            PointValue::ExponentialHistogram(_) => {}
             PointValue::Histogram(h) => {
                 let bucket = format!("{name}_bucket");
                 let mut cumulative = 0u64;

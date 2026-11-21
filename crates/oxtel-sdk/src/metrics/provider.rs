@@ -4,10 +4,11 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use crate::export::{ExportError, ProcessorStats};
-use crate::metrics::data::MetricFamily;
+use crate::metrics::data::{HistogramAggregation, MetricFamily, MetricKind, Temporality};
 use crate::metrics::export::MetricExporter;
 use crate::metrics::reader::{PeriodicReader, PeriodicReaderConfig};
-use crate::metrics::store::{Config, ExemplarFilter, MetricsRecorder, Store};
+use crate::metrics::store::{Collection, Config, ExemplarFilter, MetricsRecorder, Store};
+use crate::metrics::view::View;
 use crate::resource::Resource;
 
 /// One metrics pipeline. Install its [`recorder`](MeterProvider::recorder)
@@ -91,6 +92,7 @@ pub struct MeterProviderBuilder {
     exemplar_filter: Option<ExemplarFilter>,
     buckets: Vec<(String, Arc<[f64]>)>,
     exporters: Vec<(Box<dyn MetricExporter>, PeriodicReaderConfig)>,
+    views: Vec<View>,
 }
 
 impl Default for MeterProviderBuilder {
@@ -101,6 +103,7 @@ impl Default for MeterProviderBuilder {
             exemplar_filter: None,
             buckets: Vec::new(),
             exporters: Vec::new(),
+            views: Vec::new(),
         }
     }
 }
@@ -158,21 +161,69 @@ impl MeterProviderBuilder {
         self
     }
 
+    /// Add a view: the first view that selects an instrument changes its
+    /// metric's name, description, aggregation, attributes or series
+    /// limit. See [`View`].
+    pub fn with_view(mut self, view: View) -> Self {
+        self.views.push(view);
+        self
+    }
+
     /// The provider.
     pub fn build(self) -> MeterProvider {
         let resource = self.resource.unwrap_or_else(Resource::from_env);
+        // What each exporter wants decides what the store keeps: a
+        // minimum-and-maximum slot per delta reader, and exponential
+        // buckets if any reader wants them.
+        let mut interval_slots = 0;
+        let mut exponential = None;
+        let wants: Vec<_> = self
+            .exporters
+            .iter()
+            .map(|(exporter, _)| {
+                let delta = [MetricKind::Counter, MetricKind::Histogram]
+                    .into_iter()
+                    .any(|kind| exporter.temporality(kind) == Temporality::Delta);
+                let slot = delta.then(|| {
+                    interval_slots += 1;
+                    interval_slots - 1
+                });
+                let aggregation = exporter.histogram_aggregation();
+                if let HistogramAggregation::Exponential {
+                    max_size,
+                    max_scale,
+                } = aggregation
+                {
+                    exponential.get_or_insert((max_size, max_scale));
+                }
+                Collection {
+                    exponential: aggregation != HistogramAggregation::Explicit,
+                    interval: slot,
+                }
+            })
+            .collect();
         let store = Arc::new(Store::new(Config {
             cardinality_limit: self.cardinality_limit,
             exemplar_filter: self
                 .exemplar_filter
                 .unwrap_or_else(ExemplarFilter::from_env),
             buckets: self.buckets,
+            interval_slots,
+            exponential,
+            views: self.views,
         }));
         let readers = self
             .exporters
             .into_iter()
-            .map(|(exporter, config)| {
-                PeriodicReader::new(Arc::clone(&store), resource.clone(), exporter, config)
+            .zip(wants)
+            .map(|((exporter, config), collection)| {
+                PeriodicReader::new(
+                    Arc::clone(&store),
+                    resource.clone(),
+                    exporter,
+                    config,
+                    collection,
+                )
             })
             .collect();
         MeterProvider {

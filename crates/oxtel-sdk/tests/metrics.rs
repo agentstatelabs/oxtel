@@ -3,8 +3,8 @@
 
 use oxtel_sdk::Resource;
 use oxtel_sdk::metrics::{
-    ExemplarFilter, MeterProvider, MetricFamily, MetricKind, OVERFLOW_ATTRIBUTE, PointValue,
-    SECONDS_BUCKETS,
+    ExemplarFilter, InMemoryMetricExporter, MeterProvider, MetricFamily, MetricKind,
+    OVERFLOW_ATTRIBUTE, Point, PointValue, SECONDS_BUCKETS,
 };
 use oxtel_sdk::trace::{Sampler, TracerProvider, span_context};
 use tracing_subscriber::layer::SubscriberExt;
@@ -252,4 +252,206 @@ fn exemplars_link_measurements_to_sampled_spans_only() {
 
     let (families, _) = record(&tracer(Sampler::AlwaysOn), ExemplarFilter::AlwaysOff);
     assert!(family(&families, "requests").points[0].exemplar.is_none());
+}
+
+/// The last export's point for `name`, if it had one.
+fn exported(exporter: &InMemoryMetricExporter, name: &str) -> Option<(MetricFamily, Point)> {
+    let families = exporter.last()?;
+    let family = families.into_iter().find(|f| f.name == name)?;
+    let point = family.points.first()?.clone();
+    Some((family, point))
+}
+
+#[test]
+fn delta_readers_export_the_change_since_their_last_collection() {
+    use oxtel_sdk::metrics::{Temporality, TemporalityPreference};
+
+    let delta =
+        InMemoryMetricExporter::default().with_temporality_preference(TemporalityPreference::Delta);
+    let cumulative = InMemoryMetricExporter::default();
+    let provider = MeterProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_periodic_exporter(delta.clone())
+        .with_periodic_exporter(cumulative.clone())
+        .build();
+    let recorder = provider.recorder();
+    let record = |f: &dyn Fn()| metrics::with_local_recorder(&recorder, f);
+
+    record(&|| {
+        metrics::counter!("jobs").increment(3);
+        metrics::histogram!("latency").record(1.0);
+        metrics::histogram!("latency").record(5.0);
+        metrics::gauge!("queue").set(4.0);
+    });
+    provider.force_flush().unwrap();
+    let (first, point) = exported(&delta, "jobs").unwrap();
+    assert_eq!(first.temporality, Temporality::Delta);
+    assert_eq!(point.value, PointValue::Counter(3));
+
+    record(&|| {
+        metrics::counter!("jobs").increment(2);
+        metrics::histogram!("latency").record(2.0);
+    });
+    provider.force_flush().unwrap();
+    let (jobs, point) = exported(&delta, "jobs").unwrap();
+    assert_eq!(point.value, PointValue::Counter(2), "only the change");
+    assert_eq!(jobs.start_time, first.time, "since the previous collection");
+    let (_, point) = exported(&delta, "latency").unwrap();
+    let PointValue::Histogram(h) = point.value else {
+        panic!()
+    };
+    assert_eq!((h.count(), h.sum), (1, 2.0));
+    assert_eq!(
+        (h.min, h.max),
+        (Some(2.0), Some(2.0)),
+        "min and max are the interval's"
+    );
+    let (queue, point) = exported(&delta, "queue").unwrap();
+    assert_eq!(
+        queue.temporality,
+        Temporality::Cumulative,
+        "gauges have none"
+    );
+    assert_eq!(point.value, PointValue::Gauge(4.0));
+
+    // Nothing new: the delta reader leaves the series out.
+    provider.force_flush().unwrap();
+    assert!(exported(&delta, "jobs").is_none());
+    assert!(exported(&delta, "latency").is_none());
+
+    // The cumulative reader still sees totals, and its own min and max.
+    let (jobs, point) = exported(&cumulative, "jobs").unwrap();
+    assert_eq!(jobs.temporality, Temporality::Cumulative);
+    assert_eq!(point.value, PointValue::Counter(5));
+    let (_, point) = exported(&cumulative, "latency").unwrap();
+    let PointValue::Histogram(h) = point.value else {
+        panic!()
+    };
+    assert_eq!((h.count(), h.min, h.max), (3, Some(1.0), Some(5.0)));
+}
+
+#[test]
+fn exponential_histograms_for_the_readers_that_want_them() {
+    use oxtel_sdk::metrics::{HistogramAggregation, TemporalityPreference};
+
+    let exponential = InMemoryMetricExporter::default()
+        .with_histogram_aggregation(HistogramAggregation::EXPONENTIAL)
+        .with_temporality_preference(TemporalityPreference::Delta);
+    let provider = MeterProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_periodic_exporter(exponential.clone())
+        .build();
+    metrics::with_local_recorder(&provider.recorder(), || {
+        for v in [0.0, 0.25, 1.0, 3.0, 1000.0] {
+            metrics::histogram!("size").record(v);
+        }
+    });
+    provider.force_flush().unwrap();
+    let (_, point) = exported(&exponential, "size").unwrap();
+    let PointValue::ExponentialHistogram(h) = point.value else {
+        panic!("{:?}", point.value)
+    };
+    assert_eq!((h.count, h.sum, h.zero_count), (5, 1004.25, 1));
+    assert_eq!((h.min, h.max), (Some(0.0), Some(1000.0)));
+    assert_eq!(h.positive.counts.iter().sum::<u64>(), 4);
+    assert!(h.positive.counts.len() <= 160 && h.scale < 20);
+
+    metrics::with_local_recorder(&provider.recorder(), || {
+        metrics::histogram!("size").record(8.0);
+    });
+    provider.force_flush().unwrap();
+    let (_, point) = exported(&exponential, "size").unwrap();
+    let PointValue::ExponentialHistogram(h) = point.value else {
+        panic!()
+    };
+    assert_eq!((h.count, h.sum, h.zero_count), (1, 8.0, 0), "a delta");
+    assert_eq!(h.positive.counts.iter().sum::<u64>(), 1);
+
+    // Pull readers, such as Prometheus, still get explicit buckets.
+    let pulled = provider.collect();
+    assert!(matches!(
+        family(&pulled, "size").points[0].value,
+        PointValue::Histogram(ref h) if h.count() == 6
+    ));
+}
+
+#[test]
+fn views_change_what_comes_out() {
+    use oxtel_sdk::metrics::{View, ViewAggregation};
+
+    let provider = MeterProvider::builder()
+        .with_resource(Resource::builder().without_env().build())
+        .with_view(View::named("cache.lookups").with_aggregation(ViewAggregation::Drop))
+        .with_view(
+            View::named("http.*")
+                .with_attributes_excluded(["url.path"])
+                .with_name("requests"),
+        )
+        .with_view(View {
+            instrument_name: Some("upload.size".into()),
+            description: Some("Upload sizes.".into()),
+            aggregation: Some(ViewAggregation::ExplicitBuckets {
+                boundaries: vec![1000.0, 10.0, 100.0],
+                record_min_max: false,
+            }),
+            cardinality_limit: Some(2),
+            ..View::default()
+        })
+        .with_view(
+            View::named("latency").with_aggregation(ViewAggregation::Exponential {
+                max_size: 20,
+                max_scale: 5,
+                record_min_max: true,
+            }),
+        )
+        .with_view(View::named("jobs").with_attributes_included(["outcome"]))
+        .build();
+    metrics::with_local_recorder(&provider.recorder(), || {
+        metrics::describe_histogram!("upload.size", "Overridden by the view.");
+        metrics::counter!("cache.lookups").increment(9);
+        metrics::counter!("http.requests", "url.path" => "/a", "method" => "GET").increment(1);
+        metrics::counter!("http.requests", "url.path" => "/b", "method" => "GET").increment(1);
+        for (user, size) in [("a", 5.0), ("b", 50.0), ("c", 500.0)] {
+            metrics::histogram!("upload.size", "user" => user).record(size);
+        }
+        metrics::histogram!("latency").record(0.3);
+        metrics::counter!("jobs", "outcome" => "ok", "job.id" => "1").increment(1);
+        metrics::counter!("jobs", "outcome" => "ok", "job.id" => "2").increment(1);
+    });
+    let families = provider.collect();
+    let names: Vec<&str> = families.iter().map(|f| f.name.as_str()).collect();
+    assert!(!names.contains(&"cache.lookups"), "dropped: {names:?}");
+    assert!(!names.contains(&"http.requests"), "renamed: {names:?}");
+
+    let requests = family(&families, "requests");
+    assert_eq!(requests.points.len(), 1, "url.path no longer splits it");
+    assert_eq!(
+        requests.points[0].attributes,
+        vec![("method".to_string(), "GET".to_string())]
+    );
+    assert_eq!(requests.points[0].value, PointValue::Counter(2));
+
+    let uploads = family(&families, "upload.size");
+    assert_eq!(uploads.description.as_deref(), Some("Upload sizes."));
+    assert_eq!(uploads.points.len(), 2, "the view's series limit");
+    assert!(uploads.points.iter().any(|p| {
+        p.attributes
+            .contains(&(OVERFLOW_ATTRIBUTE.to_string(), "true".to_string()))
+    }));
+    let PointValue::Histogram(h) = &uploads.points[0].value else {
+        panic!()
+    };
+    assert_eq!(&*h.bounds, &[10.0, 100.0, 1000.0]);
+    assert_eq!((h.min, h.max), (None, None), "record_min_max: false");
+
+    let latency = family(&families, "latency");
+    assert!(
+        matches!(&latency.points[0].value, PointValue::ExponentialHistogram(h) if h.count == 1 && h.scale <= 5),
+        "exponential for every reader: {:?}",
+        latency.points[0].value
+    );
+
+    let jobs = family(&families, "jobs");
+    assert_eq!(jobs.points.len(), 1);
+    assert_eq!(jobs.points[0].value, PointValue::Counter(2));
 }

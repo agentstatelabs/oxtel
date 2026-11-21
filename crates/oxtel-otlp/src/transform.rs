@@ -3,7 +3,9 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use oxtel_sdk::logs::LogRecord;
-use oxtel_sdk::metrics::{Exemplar, MetricFamily, OVERFLOW_ATTRIBUTE, Point, PointValue};
+use oxtel_sdk::metrics::{
+    Exemplar, ExponentialBuckets, MetricFamily, OVERFLOW_ATTRIBUTE, Point, PointValue, Temporality,
+};
 use oxtel_sdk::trace::{Link, Scope, SpanData, SpanKind, Status};
 use oxtel_sdk::{KeyValue, Resource, Value};
 
@@ -56,7 +58,8 @@ pub fn logs_request(batch: &[LogRecord], res: &Resource) -> ExportLogsServiceReq
 
 /// The OTLP request for one collection of metrics: one resource, the
 /// metrics grouped by instrumentation scope. Values are cumulative since
-/// each family's start time. Families without series are left out.
+/// each family's start time, or deltas since it, as the family's
+/// temporality says. Families without series are left out.
 pub fn metrics_request(families: &[MetricFamily], res: &Resource) -> ExportMetricsServiceRequest {
     let families: Vec<&MetricFamily> = families.iter().filter(|f| !f.points.is_empty()).collect();
     ExportMetricsServiceRequest {
@@ -75,9 +78,11 @@ pub fn metrics_request(families: &[MetricFamily], res: &Resource) -> ExportMetri
     }
 }
 
-const CUMULATIVE: i32 = metrics::AggregationTemporality::Cumulative as i32;
-
 fn metric_to_proto(family: &MetricFamily) -> metrics::Metric {
+    let temporality = match family.temporality {
+        Temporality::Cumulative => metrics::AggregationTemporality::Cumulative,
+        Temporality::Delta => metrics::AggregationTemporality::Delta,
+    } as i32;
     use metrics::metric::Data;
     use metrics::number_data_point::Value as Number;
     let (start, time) = (unix_nanos(family.start_time), unix_nanos(family.time));
@@ -104,7 +109,7 @@ fn metric_to_proto(family: &MetricFamily) -> metrics::Metric {
                     _ => None,
                 })
                 .collect(),
-            aggregation_temporality: CUMULATIVE,
+            aggregation_temporality: temporality,
             is_monotonic: true,
         }),
         Some(PointValue::Gauge(_)) => Data::Gauge(metrics::Gauge {
@@ -117,6 +122,42 @@ fn metric_to_proto(family: &MetricFamily) -> metrics::Metric {
                 })
                 .collect(),
         }),
+        Some(PointValue::ExponentialHistogram(_)) => {
+            Data::ExponentialHistogram(metrics::ExponentialHistogram {
+                data_points: family
+                    .points
+                    .iter()
+                    .filter_map(|p| match &p.value {
+                        PointValue::ExponentialHistogram(h) => {
+                            let buckets = |b: &ExponentialBuckets| {
+                                Some(metrics::exponential_histogram_data_point::Buckets {
+                                    offset: b.offset,
+                                    bucket_counts: b.counts.clone(),
+                                })
+                            };
+                            Some(metrics::ExponentialHistogramDataPoint {
+                                attributes: point_attributes(p),
+                                start_time_unix_nano: start,
+                                time_unix_nano: time,
+                                count: h.count,
+                                sum: Some(h.sum),
+                                scale: h.scale,
+                                zero_count: h.zero_count,
+                                positive: buckets(&h.positive),
+                                negative: buckets(&h.negative),
+                                flags: 0,
+                                exemplars: h.exemplars.iter().map(exemplar_to_proto).collect(),
+                                min: h.min,
+                                max: h.max,
+                                zero_threshold: 0.0,
+                            })
+                        }
+                        _ => None,
+                    })
+                    .collect(),
+                aggregation_temporality: temporality,
+            })
+        }
         _ => Data::Histogram(metrics::Histogram {
             data_points: family
                 .points
@@ -143,7 +184,7 @@ fn metric_to_proto(family: &MetricFamily) -> metrics::Metric {
                     _ => None,
                 })
                 .collect(),
-            aggregation_temporality: CUMULATIVE,
+            aggregation_temporality: temporality,
         }),
     };
     metrics::Metric {

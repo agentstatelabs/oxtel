@@ -31,9 +31,9 @@ use std::fmt;
 use std::path::Path;
 
 pub use model::{
-    AttributeValue, Config, ExporterConfig, Limits, LoggerProviderConfig, MeterProviderConfig,
-    OtlpFileConfig, OtlpGrpcConfig, OtlpHttpConfig, ProcessorConfig, ReaderConfig, ResourceConfig,
-    SamplerConfig, TlsConfig, TracerProviderConfig,
+    AggregationConfig, AttributeValue, Config, ExporterConfig, Limits, LoggerProviderConfig,
+    MeterProviderConfig, OtlpFileConfig, OtlpGrpcConfig, OtlpHttpConfig, ProcessorConfig,
+    ReaderConfig, ResourceConfig, SamplerConfig, TlsConfig, TracerProviderConfig, ViewConfig,
 };
 
 /// A configuration and what in it was ignored.

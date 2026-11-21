@@ -245,7 +245,7 @@ unknown_top_level: 1
         }]
     );
     let w = parsed.warnings.join("\n");
-    for expected in ["zipkin", "jaeger_remote", "views", "unknown_top_level"] {
+    for expected in ["zipkin", "jaeger_remote", "unknown_top_level"] {
         assert!(w.contains(expected), "no warning about {expected}:\n{w}");
     }
 }
@@ -265,13 +265,19 @@ meter_provider:
     - periodic:
         exporter:
           otlp_file/development:
+            temporality_preference: delta
+            default_histogram_aggregation: base2_exponential_bucket_histogram
 "#;
     let parsed = parse_with(text, &|_| None).unwrap();
     assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
     assert!(matches!(
         &parsed.config.tracer_provider.unwrap().processors[0],
         ProcessorConfig::Batch {
-            exporter: ExporterConfig::OtlpFile(OtlpFileConfig { output_stream: Some(s) }),
+            exporter: ExporterConfig::OtlpFile(OtlpFileConfig {
+                output_stream: Some(s),
+                temporality_preference: None,
+                exponential_histograms: false,
+            }),
             ..
         } if s == "file:///var/log/traces.jsonl"
     ));
@@ -279,10 +285,12 @@ meter_provider:
         &parsed.config.meter_provider.unwrap().readers[0],
         ReaderConfig::Periodic {
             exporter: ExporterConfig::OtlpFile(OtlpFileConfig {
-                output_stream: None
+                output_stream: None,
+                temporality_preference: Some(t),
+                exponential_histograms: true,
             }),
             ..
-        }
+        } if t == "delta"
     ));
 
     let bad = "file_format: \"1.2\"\ntracer_provider:\n  processors:\n    - simple:\n        exporter:\n          otlp_file/development:\n            output_stream: /var/log/traces.jsonl\n";
@@ -305,6 +313,7 @@ tracer_provider:
             endpoint: https://collector:4317
             compression: gzip
             headers_list: api-key=k
+            temporality_preference: low_memory
             tls:
               ca_file: /etc/otel/ca.pem
               cert_file: /etc/otel/client.pem
@@ -334,6 +343,8 @@ logger_provider:
                 headers_list: Some("api-key=k".into()),
                 gzip: true,
                 timeout_ms: None,
+                temporality_preference: Some("low_memory".into()),
+                exponential_histograms: false,
                 tls: files,
             }),
             schedule_delay_ms: None,
@@ -349,6 +360,74 @@ logger_provider:
             .as_deref(),
         Some("/etc/otel/ca.pem")
     );
+}
+
+#[test]
+fn views_are_read() {
+    use oxtel_config::{AggregationConfig, ViewConfig};
+    let text = r#"
+file_format: "1.2"
+meter_provider:
+  views:
+    - selector:
+        instrument_name: http.*
+        instrument_type: histogram
+        unit: s
+        meter_name: oxtel_tower
+      stream:
+        name: requests
+        description: Requests.
+        aggregation:
+          explicit_bucket_histogram:
+            boundaries: [0.1, 1, 10]
+            record_min_max: false
+        attribute_keys:
+          excluded: [url.path]
+        aggregation_cardinality_limit: 100
+    - selector: {instrument_name: cache.*}
+      stream: {aggregation: {drop: }}
+    - selector: {instrument_name: latency, meter_version: "1.0"}
+      stream:
+        aggregation:
+          base2_exponential_bucket_histogram: {max_scale: 5}
+        attribute_keys: {included: [route]}
+"#;
+    let parsed = parse_with(text, &|_| None).unwrap();
+    assert_eq!(parsed.warnings.len(), 1, "{:#?}", parsed.warnings);
+    assert!(parsed.warnings[0].contains("meter_version"));
+    let views = parsed.config.meter_provider.unwrap().views;
+    assert_eq!(
+        views[0],
+        ViewConfig {
+            instrument_name: Some("http.*".into()),
+            instrument_type: Some("histogram".into()),
+            unit: Some("s".into()),
+            meter_name: Some("oxtel_tower".into()),
+            name: Some("requests".into()),
+            description: Some("Requests.".into()),
+            aggregation: Some(AggregationConfig::ExplicitBucketHistogram {
+                boundaries: Some(vec![0.1, 1.0, 10.0]),
+                record_min_max: Some(false),
+            }),
+            attributes_included: None,
+            attributes_excluded: Some(vec!["url.path".into()]),
+            cardinality_limit: Some(100),
+        }
+    );
+    assert_eq!(views[1].aggregation, Some(AggregationConfig::Drop));
+    assert_eq!(
+        views[2].aggregation,
+        Some(AggregationConfig::Base2ExponentialBucketHistogram {
+            max_scale: Some(5),
+            max_size: None,
+            record_min_max: None,
+        })
+    );
+    assert_eq!(views[2].attributes_included, Some(vec!["route".into()]));
+
+    let bad = "file_format: \"1.2\"\nmeter_provider:\n  views:\n    - stream: {aggregation: {median: }}\n";
+    let error = parse_with(bad, &|_| None).unwrap_err().to_string();
+    assert!(error.contains("median"), "{error}");
 }
 
 #[test]

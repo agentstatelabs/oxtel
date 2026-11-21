@@ -3,7 +3,9 @@
 use std::sync::{Arc, Mutex};
 
 use crate::export::ExportError;
-use crate::metrics::data::MetricFamily;
+use crate::metrics::data::{
+    HistogramAggregation, MetricFamily, MetricKind, Temporality, TemporalityPreference,
+};
 use crate::resource::Resource;
 
 /// Sends collected metrics somewhere. Called from a reader's thread, never
@@ -26,6 +28,20 @@ pub trait MetricExporter: Send + Sync + 'static {
     fn shutdown(&self) -> Result<(), ExportError> {
         Ok(())
     }
+
+    /// The temporality it wants for metrics of `kind`: cumulative unless it
+    /// says otherwise. The periodic reader turns cumulative values into
+    /// deltas for it.
+    fn temporality(&self, kind: MetricKind) -> Temporality {
+        let _ = kind;
+        Temporality::Cumulative
+    }
+
+    /// How it wants histograms aggregated: in explicit buckets unless it
+    /// says otherwise.
+    fn histogram_aggregation(&self) -> HistogramAggregation {
+        HistogramAggregation::Explicit
+    }
 }
 
 /// Keeps each export in memory, for tests.
@@ -33,9 +49,25 @@ pub trait MetricExporter: Send + Sync + 'static {
 pub struct InMemoryMetricExporter {
     exports: Arc<Mutex<Vec<Vec<MetricFamily>>>>,
     resource: Arc<Mutex<Option<Resource>>>,
+    temporality: TemporalityPreference,
+    histograms: HistogramAggregation,
 }
 
 impl InMemoryMetricExporter {
+    /// Ask for this temporality, as an OTLP exporter can. Default:
+    /// cumulative.
+    pub fn with_temporality_preference(mut self, preference: TemporalityPreference) -> Self {
+        self.temporality = preference;
+        self
+    }
+
+    /// Ask for histograms aggregated this way, as an OTLP exporter can.
+    /// Default: explicit buckets.
+    pub fn with_histogram_aggregation(mut self, aggregation: HistogramAggregation) -> Self {
+        self.histograms = aggregation;
+        self
+    }
+
     /// Every export so far, oldest first.
     pub fn exports(&self) -> Vec<Vec<MetricFamily>> {
         self.exports
@@ -73,6 +105,14 @@ impl InMemoryMetricExporter {
 impl MetricExporter for InMemoryMetricExporter {
     fn destination(&self) -> String {
         "memory".into()
+    }
+
+    fn temporality(&self, kind: MetricKind) -> Temporality {
+        self.temporality.temporality(kind)
+    }
+
+    fn histogram_aggregation(&self) -> HistogramAggregation {
+        self.histograms
     }
 
     fn export(&self, metrics: &[MetricFamily], resource: &Resource) -> Result<(), ExportError> {

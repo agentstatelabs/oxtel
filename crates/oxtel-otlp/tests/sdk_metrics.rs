@@ -72,6 +72,7 @@ fn value(metrics: &[MetricFamily], name: &str, want: &[(&str, &str)]) -> Option<
         .map(|p| match &p.value {
             PointValue::Counter(v) => *v,
             PointValue::Histogram(h) => h.count(),
+            PointValue::ExponentialHistogram(h) => h.count,
             PointValue::Gauge(v) => *v as u64,
         })
 }

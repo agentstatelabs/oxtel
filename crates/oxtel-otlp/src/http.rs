@@ -10,7 +10,10 @@ use std::time::{Duration, Instant};
 use oxtel_sdk::Resource;
 use oxtel_sdk::export::ExportError;
 use oxtel_sdk::logs::{LogExporter, LogRecord};
-use oxtel_sdk::metrics::{MetricExporter, MetricFamily};
+use oxtel_sdk::metrics::{
+    HistogramAggregation, MetricExporter, MetricFamily, MetricKind, Temporality,
+    TemporalityPreference,
+};
 use oxtel_sdk::sdk_metrics::ExporterMetrics;
 use oxtel_sdk::trace::{SpanData, SpanExporter};
 use prost::Message;
@@ -202,6 +205,8 @@ pub struct OtlpHttpExporter {
 struct Inner {
     targets: [Target; 3],
     initial_backoff: Duration,
+    temporality: TemporalityPreference,
+    histograms: HistogramAggregation,
 }
 
 /// How one signal's data travels.
@@ -516,6 +521,8 @@ impl TargetConfig {
 pub struct OtlpHttpExporterBuilder {
     targets: [TargetConfig; 3],
     initial_backoff: Duration,
+    temporality: TemporalityPreference,
+    histograms: HistogramAggregation,
 }
 
 impl Default for OtlpHttpExporterBuilder {
@@ -541,6 +548,13 @@ impl OtlpHttpExporterBuilder {
     /// - TLS: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]CERTIFICATE`,
     ///   `_CLIENT_CERTIFICATE` and `_CLIENT_KEY`, PEM files; see
     ///   [`TlsFiles`].
+    ///
+    /// and for metrics:
+    /// - temporality: `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE`,
+    ///   `cumulative` (the default), `delta` or `lowmemory`;
+    /// - histograms: `OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION`,
+    ///   `explicit_bucket_histogram` (the default) or
+    ///   `base2_exponential_bucket_histogram`.
     pub fn from_env() -> Self {
         Self::with_lookup(&|name| std::env::var(name).ok())
     }
@@ -600,6 +614,12 @@ impl OtlpHttpExporterBuilder {
         OtlpHttpExporterBuilder {
             targets: Signal::ALL.map(target),
             initial_backoff: Duration::from_millis(500),
+            temporality: var("OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE")
+                .and_then(|p| TemporalityPreference::from_name(&p))
+                .unwrap_or_default(),
+            histograms: var("OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION")
+                .and_then(|a| HistogramAggregation::from_name(&a))
+                .unwrap_or_default(),
         }
     }
 
@@ -685,6 +705,20 @@ impl OtlpHttpExporterBuilder {
         self
     }
 
+    /// Export metrics with this temporality: cumulative, or deltas for
+    /// backends that prefer them.
+    pub fn with_temporality_preference(mut self, preference: TemporalityPreference) -> Self {
+        self.temporality = preference;
+        self
+    }
+
+    /// Aggregate histograms this way for this exporter: in explicit
+    /// buckets, or exponential ones.
+    pub fn with_histogram_aggregation(mut self, aggregation: HistogramAggregation) -> Self {
+        self.histograms = aggregation;
+        self
+    }
+
     /// The first retry's wait; each later one doubles, up to 5 seconds.
     pub fn with_initial_backoff(mut self, backoff: Duration) -> Self {
         self.initial_backoff = backoff;
@@ -760,6 +794,8 @@ impl OtlpHttpExporterBuilder {
                     }
                 }),
                 initial_backoff: self.initial_backoff,
+                temporality: self.temporality,
+                histograms: self.histograms,
             }),
         }
     }
@@ -937,6 +973,14 @@ impl MetricExporter for OtlpHttpExporter {
 
     fn destination(&self) -> String {
         OtlpHttpExporter::destination(self, Signal::Metrics)
+    }
+
+    fn temporality(&self, kind: MetricKind) -> Temporality {
+        self.inner.temporality.temporality(kind)
+    }
+
+    fn histogram_aggregation(&self) -> HistogramAggregation {
+        self.inner.histograms
     }
 }
 
