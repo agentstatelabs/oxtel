@@ -1,0 +1,2 @@
+{"timestamp":"2026-11-20T21:07:30.761876Z","level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)"}
+{"timestamp":"2026-11-20T21:07:30.762987Z","level":"INFO","target":"database","message":"tea sold","trace_id":"b70cd70af0f1cbea64e8d03a7f2ded77","span_id":"338513c425ca77f4","orders":2,"cents":900}

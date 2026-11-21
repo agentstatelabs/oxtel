@@ -1,0 +1,55 @@
+---
+title: A command-line tool
+description: A program that runs for a moment and exits, with its results on standard output, its log lines on standard error, and nothing lost on the way out.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+A program that does one job and exits: a build step, an import, a script that cron runs. Its results go to standard output, so they can be piped into another program or saved to a file. Its log lines go to standard error, so they never get mixed into the results.
+
+This one prints the prime numbers up to a limit, 100 unless it's given another.
+
+## The code
+
+<Example file="examples/cli.rs" />
+
+## Dependencies
+
+<Example file="examples/cli.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/cli.rs" doc="bash" />
+
+## What it prints
+
+The primes go to standard output, one per line. Standard error gets oxtel's startup line, then the tool's own:
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/cli.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/cli.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+The whole run is one span, `primes`, so its lines carry the limit and the run's trace id. Given something that isn't a number, the tool logs the error inside the same span, at `error`, and exits with status 1. CI runs the example and checks it still prints these lines.
+
+## Exiting without losing anything
+
+Once oxtel sends telemetry somewhere, it sends traces and logs in batches, in the background, and metrics every 60 seconds. A tool that runs for a second would exit before any of that happened, if it weren't for the guard: the value `oxtel::init()` returns. Dropping it sends everything still pending, and waits for that to finish.
+
+- **Return from `main`,** on failure too. Return an `ExitCode`, as here, or an error. Either way `main` ends normally and the guard is dropped. `std::process::exit` ends the process on the spot and drops nothing, so the last batch is lost. If you must call it, drop the guard first.
+- **Create the guard first.** Rust drops a function's values in the reverse of the order they were made, so the guard, made first, is dropped last, after any span still open has ended and can be sent with the rest.
+- **A panic** in `main` drops the guard as it unwinds, so what was pending is still sent. With `panic = "abort"` in the build profile, nothing is dropped.
+- **An unreachable collector** delays exit by at most 5 seconds. `oxtel::builder().with_shutdown_timeout(...)` changes that.
+
+## For production
+
+- **Keep standard output for results.** `OXTEL_LOG_OUTPUT=stdout` would put log lines among them.
+- **Name the tool.** Set `OTEL_SERVICE_NAME`; otherwise backends show `unknown_service:` and the executable's name.
+- **Expect one trace per run.** With a span around the run, as here, a backend shows each run as one trace, with everything it logged.
