@@ -1926,6 +1926,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxtel-tokio"
+version = "0.3.1"
+dependencies = [
+ "metrics",
+ "oxtel-sdk",
+ "tokio",
+]
+
+[[package]]
 name = "oxtel-tower"
 version = "0.3.1"
 dependencies = [

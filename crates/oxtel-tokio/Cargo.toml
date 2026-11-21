@@ -1,0 +1,25 @@
+[package]
+name = "oxtel-tokio"
+description = "tokio runtime metrics: workers, tasks, queue depth and how busy the runtime is"
+readme = "../../README.md"
+keywords = ["opentelemetry", "tokio", "metrics", "runtime"]
+categories = ["development-tools::debugging", "asynchronous"]
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+
+[dependencies]
+metrics = "0.24"
+# 1.45 stabilized the busy-time metric.
+tokio = { version = "1.45", default-features = false, features = ["rt"] }
+
+[dev-dependencies]
+oxtel-sdk = { path = "../oxtel-sdk" }
+tokio = { version = "1.45", features = ["rt", "rt-multi-thread", "macros", "time"] }
+
+[lints]
+workspace = true

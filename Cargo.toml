@@ -14,6 +14,8 @@ authors = ["AgentStateLabs <info@agentstatelabs.com>"]
 [workspace.lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
+# oxtel-tokio records tokio's unstable metrics when built with them.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(tokio_unstable)"] }
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }

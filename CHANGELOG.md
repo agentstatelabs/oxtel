@@ -15,6 +15,15 @@ All notable changes to oxtel are recorded here. The format follows
   - Embeddings calls record `gen_ai.client.operation.duration`, since they aren't inference.
   - Token metrics are recorded only when the call reports its tokens, as the conventions require. No prompt or completion content is recorded.
 - **The GenAI conventions' histogram buckets.** `gen_ai.client.inference.duration` and the other GenAI durations get bounds from 0.01 s to 81.92 s, and the per-call token histograms powers of four from 1 to 67,108,864, as the conventions advise. They're exported from `oxtel_sdk::metrics` as `GENAI_SECONDS_BUCKETS` and `GENAI_TOKEN_BUCKETS`.
+- **`oxtel-tokio`, a new crate: tokio runtime metrics.** `let _runtime = oxtel_tokio::record(&Handle::current());` records every ten seconds, until the value it returns is dropped:
+  - `oxtel.tokio.worker.count`, the worker threads;
+  - `oxtel.tokio.task.count`, the tasks spawned and not yet finished;
+  - `oxtel.tokio.global_queue.length`, the tasks waiting in the global queue;
+  - `oxtel.tokio.utilization`, the share of the workers' time spent running tasks since the last recording, from 0 to 1.
+  - Built with `--cfg tokio_unstable`, it also records the blocking pool: `oxtel.tokio.blocking.thread.count` by state (`busy` or `idle`) and `oxtel.tokio.blocking.queue.length`.
+  - The OpenTelemetry conventions define no tokio metrics, so these are named under `oxtel.`.
+  - It records on a thread of its own, so it keeps going when the runtime is too busy to run anything else. `oxtel_tokio::Sampler` records on demand instead, and `with_name` labels each runtime of a program that has several.
+  - It needs tokio 1.45 or later.
 
 ### Changed
 - **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
