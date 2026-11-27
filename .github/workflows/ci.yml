@@ -81,6 +81,8 @@ jobs:
         run: cargo run -q -p xtask -- check-examples
       - name: The examples still print what examples/output shows
         run: cargo run -q -p xtask -- check-output
+      - name: The settings page describes every setting the code reads
+        run: cargo run -q -p xtask -- check-settings
 
   msrv:
     runs-on: ubuntu-latest

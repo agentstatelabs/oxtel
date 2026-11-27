@@ -8,6 +8,9 @@
 //! - `cargo run -p xtask -- check-examples` builds each example that lists
 //!   its dependencies as a program of its own, with only those
 //!   dependencies.
+//! - `cargo run -p xtask -- gen-settings` writes the site's settings page
+//!   from the table in `settings.rs`, and `check-settings` checks that
+//!   table against the code and the page against the table.
 //! - `cargo run -p xtask -- check-output` runs the examples that have a
 //!   file in `examples/output/` and checks they still print what it shows,
 //!   since the site shows those files as their output. `--bless` rewrites
@@ -16,6 +19,8 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
+
+mod settings;
 
 /// The Weaver release the templates are written for.
 const WEAVER_VERSION: &str = "0.26.1";
@@ -70,9 +75,29 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("gen-settings") => {
+            let path = workspace_root().join(settings::PAGE);
+            match std::fs::write(&path, settings::page()) {
+                Ok(()) => {
+                    println!("wrote {}", settings::PAGE);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("gen-settings failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("check-settings") => match settings::check(&workspace_root()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("check-settings failed:\n{e}");
+                ExitCode::FAILURE
+            }
+        },
         _ => {
             eprintln!(
-                "usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples | check-output [--bless]"
+                "usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples | check-output [--bless] | gen-settings | check-settings"
             );
             ExitCode::from(2)
         }
