@@ -140,9 +140,13 @@ impl EnvConfig {
                 if let Some(protocol) = protocol.map(|p| p.trim().to_ascii_lowercase())
                     && protocol != "http/protobuf"
                     && protocol != "http/json"
+                    && !(protocol == "grpc" && grpc_available())
                 {
-                    let warning =
-                        format!("{var}={protocol} isn't supported yet; using http/protobuf");
+                    let warning = if protocol == "grpc" {
+                        format!("{var}=grpc needs oxtel's `grpc` feature; using http/protobuf")
+                    } else {
+                        format!("{var}={protocol} isn't supported; using http/protobuf")
+                    };
                     if !warnings.contains(&warning) {
                         warnings.push(warning);
                     }
@@ -229,6 +233,19 @@ impl EnvConfig {
     }
 }
 
+/// Whether OTLP can be sent over gRPC: the `grpc` feature of oxtel, or of
+/// oxtel-otlp, which features unify into.
+pub(crate) fn grpc_available() -> bool {
+    #[cfg(feature = "otlp")]
+    {
+        oxtel_otlp::Protocol::from_name("grpc").is_some()
+    }
+    #[cfg(not(feature = "otlp"))]
+    {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -307,14 +324,28 @@ mod tests {
     fn unsupported_protocols_fall_back_to_http_protobuf() {
         let c = config(&[
             ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4318"),
-            ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "http/thrift"),
             ("OTEL_EXPORTER_OTLP_LOGS_PROTOCOL", "http/protobuf"),
         ]);
         assert_eq!(
             c.warnings,
-            vec!["OTEL_EXPORTER_OTLP_PROTOCOL=grpc isn't supported yet; using http/protobuf"],
+            vec!["OTEL_EXPORTER_OTLP_PROTOCOL=http/thrift isn't supported; using http/protobuf"],
             "reported once, and not for logs, which name a supported protocol"
         );
+        let c = config(&[
+            ("OTEL_EXPORTER_OTLP_ENDPOINT", "http://collector:4317"),
+            ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
+        ]);
+        if grpc_available() {
+            assert!(c.warnings.is_empty(), "{:?}", c.warnings);
+        } else {
+            assert_eq!(
+                c.warnings,
+                vec![
+                    "OTEL_EXPORTER_OTLP_PROTOCOL=grpc needs oxtel's `grpc` feature; using http/protobuf"
+                ]
+            );
+        }
         let c = config(&[
             ("OTEL_EXPORTER_OTLP_PROTOCOL", "grpc"),
             ("OTEL_TRACES_EXPORTER", "console"),

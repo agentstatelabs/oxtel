@@ -18,6 +18,9 @@ default = ["otlp", "log", "config", "mappings"]
 config = ["dep:oxtel-config"]
 # OTLP over HTTP: an HTTP client with rustls, and gzip.
 otlp = ["dep:oxtel-otlp"]
+# OTLP over gRPC too, for OTEL_EXPORTER_OTLP_PROTOCOL=grpc: tonic's HTTP/2
+# client, on a small tokio runtime of its own.
+grpc = ["otlp", "oxtel-otlp/grpc"]
 # Forward records from the `log` crate into `tracing`, and so into oxtel.
 log = ["dep:tracing-log"]
 # Spans and metrics, under the conventions' names, from what libraries

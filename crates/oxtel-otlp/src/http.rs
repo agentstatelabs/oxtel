@@ -1,6 +1,8 @@
-//! OTLP over HTTP with protobuf bodies (`http/protobuf`).
+//! OTLP over HTTP, with protobuf (`http/protobuf`) or JSON (`http/json`)
+//! bodies, and over gRPC (`grpc`) with the `grpc` feature.
 
 use std::io::Write as _;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
@@ -16,9 +18,11 @@ use prost::Message;
 use crate::proto::collector::logs::v1::ExportLogsServiceResponse;
 use crate::proto::collector::metrics::v1::ExportMetricsServiceResponse;
 use crate::proto::collector::trace::v1::ExportTraceServiceResponse;
+use crate::tls::{TlsFiles, read};
 use crate::transform::{logs_request, metrics_request, traces_request};
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:4318";
+const DEFAULT_GRPC_ENDPOINT: &str = "http://localhost:4317";
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A kind of telemetry OTLP carries.
@@ -46,14 +50,33 @@ impl Signal {
 
     /// oxtel's own metrics for this signal's exporter: its component type,
     /// and the count it records.
-    fn sdk_metrics(self) -> (&'static str, &'static str) {
+    fn sdk_metrics(self, protocol: Protocol) -> (&'static str, &'static str) {
+        let grpc = protocol == Protocol::Grpc;
         match self {
-            Signal::Traces => ("otlp_http_span_exporter", "otel.sdk.exporter.span.exported"),
+            Signal::Traces => (
+                if grpc {
+                    "otlp_grpc_span_exporter"
+                } else {
+                    "otlp_http_span_exporter"
+                },
+                "otel.sdk.exporter.span.exported",
+            ),
             Signal::Metrics => (
-                "otlp_http_metric_exporter",
+                if grpc {
+                    "otlp_grpc_metric_exporter"
+                } else {
+                    "otlp_http_metric_exporter"
+                },
                 "otel.sdk.exporter.metric_data_point.exported",
             ),
-            Signal::Logs => ("otlp_http_log_exporter", "otel.sdk.exporter.log.exported"),
+            Signal::Logs => (
+                if grpc {
+                    "otlp_grpc_log_exporter"
+                } else {
+                    "otlp_http_log_exporter"
+                },
+                "otel.sdk.exporter.log.exported",
+            ),
         }
     }
 
@@ -66,30 +89,37 @@ impl Signal {
     }
 }
 
-/// How request bodies are encoded.
+/// How data is sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Protocol {
-    /// Protobuf (`http/protobuf`), the default.
+    /// HTTP with protobuf bodies (`http/protobuf`), the default.
     HttpProtobuf,
-    /// OTLP/JSON (`http/json`).
+    /// HTTP with OTLP/JSON bodies (`http/json`).
     HttpJson,
+    /// gRPC (`grpc`), which needs the `grpc` feature. The endpoint is used
+    /// as is, with no `/v1/{signal}` path, and defaults to
+    /// `http://localhost:4317`.
+    Grpc,
 }
 
 impl Protocol {
-    /// The protocol named `http/protobuf` or `http/json`.
+    /// The protocol named `http/protobuf`, `http/json` or, with the `grpc`
+    /// feature, `grpc`.
     pub fn from_name(name: &str) -> Option<Self> {
         match name.trim().to_ascii_lowercase().as_str() {
             "http/protobuf" => Some(Protocol::HttpProtobuf),
             "http/json" => Some(Protocol::HttpJson),
+            "grpc" if cfg!(feature = "grpc") => Some(Protocol::Grpc),
             _ => None,
         }
     }
 
-    /// The protocol's name: `http/protobuf` or `http/json`.
+    /// The protocol's name: `http/protobuf`, `http/json` or `grpc`.
     pub fn name(self) -> &'static str {
         match self {
             Protocol::HttpProtobuf => "http/protobuf",
             Protocol::HttpJson => "http/json",
+            Protocol::Grpc => "grpc",
         }
     }
 }
@@ -148,29 +178,49 @@ impl OtlpRequest for crate::proto::collector::metrics::v1::ExportMetricsServiceR
     }
 }
 
-/// Exports to an OTLP/HTTP receiver, such as an OpenTelemetry Collector:
-/// spans to `{endpoint}/v1/traces`, metrics to `{endpoint}/v1/metrics` and
-/// log records to `{endpoint}/v1/logs`.
-/// Clones share one connection pool, so one exporter can serve every
+/// Exports to an OTLP receiver, such as an OpenTelemetry Collector. Over
+/// HTTP, spans go to `{endpoint}/v1/traces`, metrics to
+/// `{endpoint}/v1/metrics` and log records to `{endpoint}/v1/logs`. With
+/// the `grpc` feature and [`Protocol::Grpc`], each signal goes to the
+/// collector services' `Export` methods at the endpoint instead. Each
+/// signal can use its own protocol.
+/// Clones share their connections, so one exporter can serve every
 /// pipeline.
 ///
-/// Retryable failures (429, 502, 503, 504 and connection errors) are
-/// retried with exponential backoff, honouring `Retry-After`, until the
-/// export timeout. Other failures aren't retried.
+/// Retryable failures (HTTP 429, 502, 503, 504, gRPC's `UNAVAILABLE` and the
+/// other codes the specification lists, and connection errors) are retried
+/// with exponential backoff, honouring `Retry-After`, until the export
+/// timeout. Other failures aren't retried.
+///
+/// For `https` endpoints, [`TlsFiles`] set the certificates that verify
+/// the receiver and the client certificate for mutual TLS.
 #[derive(Clone)]
 pub struct OtlpHttpExporter {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    agent: ureq::Agent,
     targets: [Target; 3],
     initial_backoff: Duration,
 }
 
+/// How one signal's data travels.
+enum Transport {
+    Http(ureq::Agent),
+    #[cfg(feature = "grpc")]
+    Grpc(Arc<crate::grpc::GrpcClient>),
+    /// Set up failed, such as a TLS file that can't be read: every export
+    /// fails with this.
+    Broken(String),
+}
+
 /// Where one signal goes, and how.
 struct Target {
+    #[cfg_attr(not(feature = "grpc"), allow(dead_code))]
+    signal: Signal,
     url: String,
+    protocol: Protocol,
+    transport: Transport,
     headers: Vec<(String, String)>,
     json: bool,
     gzip: bool,
@@ -191,22 +241,30 @@ impl OtlpHttpExporter {
     }
 
     /// Where `signal` goes, for people: its URL without credentials, a
-    /// query or a fragment, and the encoding, such as
-    /// `http://collector:4318/v1/traces (OTLP)`.
+    /// query or a fragment, and the protocol, such as
+    /// `http://collector:4318/v1/traces (OTLP)` or
+    /// `http://collector:4317 (OTLP/gRPC)`.
     pub fn destination(&self, signal: Signal) -> String {
         let encoding = match self.protocol(signal) {
             Protocol::HttpProtobuf => "OTLP",
             Protocol::HttpJson => "OTLP/JSON",
+            Protocol::Grpc => "OTLP/gRPC",
         };
         format!("{} ({encoding})", shown_url(self.url(signal)))
     }
 
-    /// How `signal`'s request bodies are encoded.
+    /// How `signal` is sent.
     pub fn protocol(&self, signal: Signal) -> Protocol {
-        if self.inner.targets[signal as usize].json {
-            Protocol::HttpJson
-        } else {
-            Protocol::HttpProtobuf
+        self.inner.targets[signal as usize].protocol
+    }
+
+    /// Why `signal` can't be sent at all, if it can't: a TLS file that
+    /// can't be read, say, or gRPC without the `grpc` feature. Every export
+    /// of it fails with this too.
+    pub fn setup_error(&self, signal: Signal) -> Option<&str> {
+        match &self.inner.targets[signal as usize].transport {
+            Transport::Broken(why) => Some(why),
+            _ => None,
         }
     }
 
@@ -247,6 +305,14 @@ impl OtlpHttpExporter {
         status: &mut Option<u16>,
         rejected: &mut usize,
     ) -> Result<(), ExportError> {
+        let agent = match &target.transport {
+            Transport::Http(agent) => agent,
+            #[cfg(feature = "grpc")]
+            Transport::Grpc(client) => {
+                return self.deliver_grpc::<R>(target, client, request, rejected);
+            }
+            Transport::Broken(why) => return Err(ExportError::Transport(why.clone())),
+        };
         let mut body = if target.json {
             request.json().into_bytes()
         } else {
@@ -265,7 +331,7 @@ impl OtlpHttpExporter {
         let mut backoff = self.inner.initial_backoff;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            let (error, wait) = match self.post(target, &body, remaining) {
+            let (error, wait) = match post(agent, target, &body, remaining) {
                 Ok(mut response) => {
                     let code = response.status().as_u16();
                     *status = Some(code);
@@ -311,44 +377,137 @@ impl OtlpHttpExporter {
         }
     }
 
-    fn post(
+    /// The retry loop for gRPC, as [`deliver`](Self::deliver)'s for HTTP.
+    #[cfg(feature = "grpc")]
+    fn deliver_grpc<R: OtlpRequest>(
         &self,
         target: &Target,
-        body: &[u8],
-        timeout: Duration,
-    ) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
-        let mut request = self
-            .inner
-            .agent
-            .post(&target.url)
-            .config()
-            .timeout_global(Some(timeout.max(Duration::from_millis(1))))
-            .build()
-            .header(
-                "Content-Type",
-                if target.json {
-                    "application/json"
-                } else {
-                    "application/x-protobuf"
-                },
-            );
-        if target.gzip {
-            request = request.header("Content-Encoding", "gzip");
+        client: &crate::grpc::GrpcClient,
+        request: &R,
+        rejected: &mut usize,
+    ) -> Result<(), ExportError> {
+        use crate::grpc::{http_status, retryable};
+        use tonic::Code;
+
+        let signal = target.signal;
+        let body = request.encode_to_vec();
+        let deadline = Instant::now() + target.timeout;
+        let mut backoff = self.inner.initial_backoff;
+        loop {
+            let remaining = deadline
+                .saturating_duration_since(Instant::now())
+                .max(Duration::from_millis(1));
+            let error = match client.export(
+                signal,
+                body.clone(),
+                &target.headers,
+                target.gzip,
+                remaining,
+            ) {
+                Ok(reply) => {
+                    if let Some(n) = R::rejected(&reply)
+                        && n > 0
+                    {
+                        target.rejected.fetch_add(n as u64, Ordering::Relaxed);
+                        *rejected = usize::try_from(n).unwrap_or(usize::MAX);
+                    }
+                    return Ok(());
+                }
+                Err(status) => {
+                    let error = match status.code() {
+                        Code::DeadlineExceeded => ExportError::Timeout,
+                        Code::Unavailable => ExportError::Transport(status.message().to_string()),
+                        code => ExportError::Rejected {
+                            status: http_status(code),
+                            message: format!("gRPC {code:?}: {}", status.message())
+                                .chars()
+                                .take(512)
+                                .collect(),
+                        },
+                    };
+                    if !retryable(status.code()) {
+                        return Err(error);
+                    }
+                    error
+                }
+            };
+            let wait = jitter(backoff);
+            if Instant::now() + wait >= deadline {
+                return Err(error);
+            }
+            std::thread::sleep(wait);
+            backoff = (backoff * 2).min(Duration::from_secs(5));
         }
-        for (name, value) in &target.headers {
-            request = request.header(name, value);
-        }
-        request.send(body)
     }
 }
 
+fn post(
+    agent: &ureq::Agent,
+    target: &Target,
+    body: &[u8],
+    timeout: Duration,
+) -> Result<ureq::http::Response<ureq::Body>, ureq::Error> {
+    let mut request = agent
+        .post(&target.url)
+        .config()
+        .timeout_global(Some(timeout.max(Duration::from_millis(1))))
+        .build()
+        .header(
+            "Content-Type",
+            if target.json {
+                "application/json"
+            } else {
+                "application/x-protobuf"
+            },
+        );
+    if target.gzip {
+        request = request.header("Content-Encoding", "gzip");
+    }
+    for (name, value) in &target.headers {
+        request = request.header(name, value);
+    }
+    request.send(body)
+}
+
+/// The gRPC clients a build has made, by endpoint and TLS files, so
+/// signals going to the same receiver share one.
+#[cfg(feature = "grpc")]
+type GrpcClients = Vec<(
+    (String, TlsFiles),
+    Result<Arc<crate::grpc::GrpcClient>, String>,
+)>;
+
 #[derive(Clone, Debug)]
 struct TargetConfig {
-    url: String,
+    /// The signal's own endpoint, used as is.
+    signal_endpoint: Option<String>,
+    /// The endpoint every signal shares: over HTTP, `/v1/{signal}` is
+    /// appended.
+    endpoint: Option<String>,
     headers: Vec<(String, String)>,
     protocol: Protocol,
     gzip: bool,
     timeout: Duration,
+    tls: TlsFiles,
+}
+
+impl TargetConfig {
+    fn url(&self, signal: Signal) -> String {
+        match self.protocol {
+            Protocol::Grpc => self
+                .signal_endpoint
+                .as_deref()
+                .or(self.endpoint.as_deref())
+                .unwrap_or(DEFAULT_GRPC_ENDPOINT)
+                .trim()
+                .to_string(),
+            _ => resolve_url(
+                self.signal_endpoint.as_deref(),
+                self.endpoint.as_deref(),
+                signal.name(),
+            ),
+        }
+    }
 }
 
 /// Builds an [`OtlpHttpExporter`]. Settings set on the builder override the
@@ -373,10 +532,15 @@ impl OtlpHttpExporterBuilder {
     ///   `http://localhost:4318/v1/{signal}`;
     /// - headers: `OTEL_EXPORTER_OTLP_HEADERS`, then
     ///   `OTEL_EXPORTER_OTLP_{SIGNAL}_HEADERS`;
-    /// - encoding: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]PROTOCOL`, `http/protobuf`
-    ///   (the default) or `http/json`; others fall back to protobuf;
+    /// - protocol: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]PROTOCOL`, `http/protobuf`
+    ///   (the default), `http/json` or, with the `grpc` feature, `grpc`,
+    ///   whose endpoints are used as is and default to
+    ///   `http://localhost:4317`; others fall back to `http/protobuf`;
     /// - compression: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]COMPRESSION` (`gzip`);
-    /// - timeout: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]TIMEOUT`, in milliseconds.
+    /// - timeout: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]TIMEOUT`, in milliseconds;
+    /// - TLS: `OTEL_EXPORTER_OTLP_[{SIGNAL}_]CERTIFICATE`,
+    ///   `_CLIENT_CERTIFICATE` and `_CLIENT_KEY`, PEM files; see
+    ///   [`TlsFiles`].
     pub fn from_env() -> Self {
         Self::with_lookup(&|name| std::env::var(name).ok())
     }
@@ -394,11 +558,6 @@ impl OtlpHttpExporterBuilder {
         let target = |signal: Signal| {
             let specific =
                 |setting: &str| var(&format!("OTEL_EXPORTER_OTLP_{}_{setting}", signal.env()));
-            let url = resolve_url(
-                specific("ENDPOINT").as_deref(),
-                var("OTEL_EXPORTER_OTLP_ENDPOINT").as_deref(),
-                signal.name(),
-            );
             let mut headers: Vec<(String, String)> = Vec::new();
             for raw in [var("OTEL_EXPORTER_OTLP_HEADERS"), specific("HEADERS")]
                 .into_iter()
@@ -419,12 +578,23 @@ impl OtlpHttpExporterBuilder {
                 .or_else(|| var("OTEL_EXPORTER_OTLP_TIMEOUT"))
                 .and_then(|ms| ms.trim().parse::<u64>().ok())
                 .map_or(DEFAULT_TIMEOUT, Duration::from_millis);
+            let file = |setting: &str| {
+                specific(setting)
+                    .or_else(|| var(&format!("OTEL_EXPORTER_OTLP_{setting}")))
+                    .map(|path| PathBuf::from(path.trim()))
+            };
             TargetConfig {
-                url,
+                signal_endpoint: specific("ENDPOINT"),
+                endpoint: var("OTEL_EXPORTER_OTLP_ENDPOINT"),
                 headers,
                 protocol,
                 gzip: compression.is_some_and(|c| c.trim().eq_ignore_ascii_case("gzip")),
                 timeout,
+                tls: TlsFiles {
+                    certificate: file("CERTIFICATE"),
+                    client_certificate: file("CLIENT_CERTIFICATE"),
+                    client_key: file("CLIENT_KEY"),
+                },
             }
         };
         OtlpHttpExporterBuilder {
@@ -433,11 +603,13 @@ impl OtlpHttpExporterBuilder {
         }
     }
 
-    /// Send every signal to this receiver, at `{endpoint}/v1/{signal}`,
-    /// such as `https://collector.example.com:4318`.
+    /// Send every signal to this receiver, such as
+    /// `https://collector.example.com:4318`: over HTTP at
+    /// `{endpoint}/v1/{signal}`, and over gRPC at the endpoint itself.
     pub fn with_endpoint(mut self, endpoint: &str) -> Self {
-        for signal in Signal::ALL {
-            self.targets[signal as usize].url = resolve_url(None, Some(endpoint), signal.name());
+        for target in &mut self.targets {
+            target.endpoint = Some(endpoint.to_string());
+            target.signal_endpoint = None;
         }
         self
     }
@@ -445,7 +617,38 @@ impl OtlpHttpExporterBuilder {
     /// Send `signal` to this URL exactly, such as
     /// `https://collector.example.com:4318/v1/traces`.
     pub fn with_url(mut self, signal: Signal, url: impl Into<String>) -> Self {
-        self.targets[signal as usize].url = url.into();
+        self.targets[signal as usize].signal_endpoint = Some(url.into());
+        self
+    }
+
+    /// Verify every signal's receiver with the certificates in this PEM
+    /// file, in place of the bundled roots.
+    pub fn with_certificate(mut self, path: impl Into<PathBuf>) -> Self {
+        let path = path.into();
+        for target in &mut self.targets {
+            target.tls.certificate = Some(path.clone());
+        }
+        self
+    }
+
+    /// Present this client certificate, with its private key, both PEM
+    /// files, to every signal's receiver: mutual TLS.
+    pub fn with_client_certificate(
+        mut self,
+        certificate: impl Into<PathBuf>,
+        key: impl Into<PathBuf>,
+    ) -> Self {
+        let (certificate, key) = (certificate.into(), key.into());
+        for target in &mut self.targets {
+            target.tls.client_certificate = Some(certificate.clone());
+            target.tls.client_key = Some(key.clone());
+        }
+        self
+    }
+
+    /// Use these TLS files for `signal`.
+    pub fn with_tls(mut self, signal: Signal, files: TlsFiles) -> Self {
+        self.targets[signal as usize].tls = files;
         self
     }
 
@@ -488,21 +691,62 @@ impl OtlpHttpExporterBuilder {
         self
     }
 
-    /// The exporter.
+    /// The exporter. A setting that can't be honoured, such as a TLS file
+    /// that can't be read, doesn't stop it: exports of the signals it
+    /// affects fail, saying why, and
+    /// [`setup_error`](OtlpHttpExporter::setup_error) says so up front.
     pub fn build(self) -> OtlpHttpExporter {
-        let config = ureq::Agent::config_builder()
-            .http_status_as_error(false)
-            .user_agent(concat!("oxtel/", env!("CARGO_PKG_VERSION")))
-            .build();
+        // Signals with the same TLS files share a connection pool.
+        let mut agents: Vec<(TlsFiles, Result<ureq::Agent, String>)> = Vec::new();
+        #[cfg(feature = "grpc")]
+        let mut channels: GrpcClients = Vec::new();
+        let mut transport = |t: &TargetConfig, url: &str| -> Transport {
+            let shared = match t.protocol {
+                #[cfg(feature = "grpc")]
+                Protocol::Grpc => {
+                    let key = (url.to_string(), t.tls.clone());
+                    let client = match channels.iter().find(|(k, _)| *k == key) {
+                        Some((_, client)) => client.clone(),
+                        None => {
+                            let client = crate::grpc::GrpcClient::new(url, &t.tls).map(Arc::new);
+                            channels.push((key, client.clone()));
+                            client
+                        }
+                    };
+                    return client.map_or_else(Transport::Broken, Transport::Grpc);
+                }
+                #[cfg(not(feature = "grpc"))]
+                Protocol::Grpc => {
+                    return Transport::Broken(format!(
+                        "OTLP over gRPC to {} needs oxtel-otlp's `grpc` feature",
+                        shown_url(url)
+                    ));
+                }
+                Protocol::HttpProtobuf | Protocol::HttpJson => {
+                    match agents.iter().find(|(files, _)| *files == t.tls) {
+                        Some((_, agent)) => agent.clone(),
+                        None => {
+                            let agent = http_agent(&t.tls);
+                            agents.push((t.tls.clone(), agent.clone()));
+                            agent
+                        }
+                    }
+                }
+            };
+            shared.map_or_else(Transport::Broken, Transport::Http)
+        };
         OtlpHttpExporter {
             inner: Arc::new(Inner {
-                agent: ureq::Agent::new_with_config(config),
                 targets: Signal::ALL.map(|signal| {
                     let t = &self.targets[signal as usize];
-                    let (kind, exported) = signal.sdk_metrics();
-                    let server = server(&t.url);
+                    let url = t.url(signal);
+                    let (kind, exported) = signal.sdk_metrics(t.protocol);
+                    let server = server(&url);
                     Target {
-                        url: t.url.clone(),
+                        signal,
+                        transport: transport(t, &url),
+                        protocol: t.protocol,
+                        url,
                         headers: t.headers.clone(),
                         json: t.protocol == Protocol::HttpJson,
                         gzip: t.gzip,
@@ -519,6 +763,60 @@ impl OtlpHttpExporterBuilder {
             }),
         }
     }
+}
+
+/// An HTTP client that trusts and presents what `tls` names.
+fn http_agent(tls: &TlsFiles) -> Result<ureq::Agent, String> {
+    use ureq::tls::{ClientCert, PemItem, RootCerts, TlsConfig, parse_pem};
+
+    let mut config = ureq::Agent::config_builder()
+        .http_status_as_error(false)
+        .user_agent(concat!("oxtel/", env!("CARGO_PKG_VERSION")));
+    if !tls.is_empty() {
+        let certificates = |path: &std::path::Path, what: &str| {
+            let pem = read(path, what)?;
+            let certs: Vec<_> = parse_pem(&pem)
+                .filter_map(|item| match item {
+                    Ok(PemItem::Certificate(cert)) => Some(Ok(cert)),
+                    Ok(_) => None,
+                    Err(e) => Some(Err(e)),
+                })
+                .collect::<Result<_, _>>()
+                .map_err(|e| format!("the {what} {} isn't valid PEM: {e}", path.display()))?;
+            if certs.is_empty() {
+                return Err(format!(
+                    "the {what} {} holds no PEM certificate",
+                    path.display()
+                ));
+            }
+            Ok(certs)
+        };
+        let mut builder = TlsConfig::builder();
+        if let Some(ca) = &tls.certificate {
+            builder = builder.root_certs(RootCerts::new_with_certs(&certificates(
+                ca,
+                "CA certificate file",
+            )?));
+        }
+        if let Some((cert, key)) = tls.client_identity()? {
+            let chain = certificates(cert, "client certificate file")?;
+            let pem = read(key, "client key file")?;
+            let key = parse_pem(&pem)
+                .find_map(|item| match item {
+                    Ok(PemItem::PrivateKey(key)) => Some(key),
+                    _ => None,
+                })
+                .ok_or_else(|| {
+                    format!(
+                        "the client key file {} holds no PEM private key",
+                        key.display()
+                    )
+                })?;
+            builder = builder.client_cert(Some(ClientCert::new_with_certs(&chain, key)));
+        }
+        config = config.tls_config(builder.build());
+    }
+    Ok(ureq::Agent::new_with_config(config.build()))
 }
 
 /// The URL for `signal`: the signal-specific endpoint as is, or the general

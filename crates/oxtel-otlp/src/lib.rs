@@ -37,13 +37,17 @@
 //! definitions; [`transform`] converts oxtel's data model to them.
 
 mod file;
+#[cfg(feature = "grpc")]
+mod grpc;
 #[cfg(feature = "http-proto")]
 mod http;
 pub mod json;
 pub mod proto;
+mod tls;
 pub mod transform;
 
 pub use file::OtlpFileExporter;
+pub use tls::TlsFiles;
 
 #[cfg(feature = "http-proto")]
 pub use http::{

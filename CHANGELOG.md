@@ -28,9 +28,19 @@ All notable changes to oxtel are recorded here. The format follows
   - In a configuration file: `otlp_file/development`, with `output_stream: stdout` (the default) or `file:///path/to/traces.jsonl`. Exporters naming the same stream share it, so lines never interleave. A file that can't be opened is a warning, and that exporter is left out.
   - In code: `oxtel_otlp::OtlpFileExporter::stdout()` or `::file(path)`, for any pipeline. It needs no HTTP client, so it works without oxtel-otlp's `http-proto` feature.
   - The startup line names it: `traces: /var/log/traces.jsonl (OTLP/JSON lines)`.
+- **OTLP over gRPC**, with the new `grpc` feature of oxtel and oxtel-otlp. `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, for every signal or one, sends to the collector services' `Export` methods at the endpoint, used as is and `http://localhost:4317` by default, with gzip, headers as metadata, partial-success counts, and the specification's retries (`UNAVAILABLE` and the other retryable codes). In a configuration file, it's the `otlp_grpc` exporter.
+  - It's tonic's HTTP/2 client, run on a small tokio runtime the exporter owns, so it works from any program, async or not, and from inside a runtime.
+  - Failures read as OTLP/HTTP's do: `UNAUTHENTICATED` is reported as status 401, with the hint to check the credentials.
+  - Without the feature, `grpc` falls back to `http/protobuf` with a warning, as before.
+  - CI's Collector conformance tests now run every signal over gRPC too.
+- **TLS certificate files, for every protocol.** `OTEL_EXPORTER_OTLP_CERTIFICATE` names the certificates that verify the receiver, in place of the bundled roots, and `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `_CLIENT_KEY` a client certificate and key for mutual TLS. Each also has a per-signal variable, such as `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`. A configuration file's `tls` (`ca_file`, `cert_file` and `key_file`) works too, where it was warned about before.
+  - A file that can't be read, or a certificate without its key, is a warning at startup naming the file. That signal isn't sent, and if it's tried anyway, each export fails saying why.
+  - In code: `OtlpHttpExporterBuilder::with_certificate`, `with_client_certificate` and `with_tls`.
 
 ### Changed
 - **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
+- **`OtlpHttpExporterBuilder::with_endpoint` and `with_url` resolve the URL when the exporter is built**, so they work whichever protocol is chosen, before or after them. `Protocol` has a third variant, `Grpc`, so a `match` on it needs an arm for it.
+- **The port 4317 warning says what to do:** set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or use port 4318. It's given only for OTLP over HTTP.
 - **`oxtel-rmcp` now requires rmcp 3.** It moves from rmcp 1.6+ to 3.5+, because it wraps rmcp's own server and client types and so must use the same major version as your program. Upgrade rmcp to 3 together with oxtel-rmcp; programs still on rmcp 1 should stay on oxtel-rmcp 0.3 until then. A client notification that rmcp adds after 3.5 is recorded with `mcp.method.name` set to `_OTHER` until oxtel knows its name.
 - **The startup line names pull metrics plainly.** With `with_pull_metrics`, it now says metrics are `kept for the program to serve, e.g. at /metrics`, instead of `the program's own setup`, which it keeps for the program's own hooks.
 

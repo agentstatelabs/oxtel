@@ -3,11 +3,11 @@
 These tests send oxtel's output to a real OpenTelemetry Collector and check
 what it decoded, through the Collector's file exporter:
 
-- **Traces** over OTLP/HTTP, protobuf and JSON, with and without gzip: ids, parents, the
+- **Traces** over OTLP/HTTP, protobuf and JSON, and OTLP/gRPC, with and without gzip: ids, parents, the
   remote-parent flag bits, kinds, typed attributes, status, events, links.
-- **Logs** over OTLP/HTTP, protobuf and JSON: severity, body, event name, typed attributes,
+- **Logs** over OTLP/HTTP, protobuf and JSON, and OTLP/gRPC: severity, body, event name, typed attributes,
   scopes from targets, and the trace and span ids of the enclosing span.
-- **Metrics** pushed over OTLP/HTTP, protobuf and JSON: sums, gauges and histograms, their
+- **Metrics** pushed over OTLP/HTTP, protobuf and JSON, and OTLP/gRPC: sums, gauges and histograms, their
   temporality, units, descriptions and exemplars.
 - **Metrics** scraped by the Collector's Prometheus receiver from oxtel's
   `/metrics` (OpenMetrics): names, types, labels, values, and exemplars that
@@ -25,5 +25,6 @@ cargo test -p oxtel-conformance -- --ignored --test-threads=1
 docker rm -f otelcol
 ```
 
-Host networking needs Linux. Elsewhere, set `OXTEL_COLLECTOR_OTLP` to the
-Collector's OTLP/HTTP address, and point its Prometheus target at your host.
+Host networking needs Linux. Elsewhere, set `OXTEL_COLLECTOR_OTLP` and
+`OXTEL_COLLECTOR_OTLP_GRPC` to the Collector's OTLP/HTTP and OTLP/gRPC
+addresses, and point its Prometheus target at your host.
