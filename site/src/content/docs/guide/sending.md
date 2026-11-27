@@ -1,6 +1,6 @@
 ---
 title: Sending to a collector
-description: OTLP over HTTP or gRPC, headers and TLS with your own certificates, and OTLP/JSON lines to standard output or a file.
+description: OTLP over HTTP or gRPC, headers, retries, TLS with your own certificates, and OTLP/JSON lines to standard output or a file.
 ---
 
 Set `OTEL_EXPORTER_OTLP_ENDPOINT`, and oxtel sends traces, metrics and logs there with OTLP, the OpenTelemetry protocol, as [Get started](/start/) shows. This page covers the choices around that: which protocol, the headers and certificates a receiver may ask for, and writing OTLP to standard output or a file when nothing receives it over the network.
@@ -34,7 +34,11 @@ Over HTTP, oxtel adds `/v1/traces`, `/v1/metrics` and `/v1/logs` to the general 
 
 - **Headers:** `OTEL_EXPORTER_OTLP_HEADERS=Authorization=Bearer <token>`, for a backend that asks for credentials. Separate several headers with commas. Over gRPC they're sent as metadata.
 - **Compression:** `OTEL_EXPORTER_OTLP_COMPRESSION=gzip`.
-- **Timeout:** `OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, for each export.
+- **Timeout:** `OTEL_EXPORTER_OTLP_TIMEOUT`, in milliseconds, for each export, retries included.
+
+## Retries
+
+When a receiver is busy or out of reach, oxtel sends the same data again, as the OTLP specification says. That's HTTP status 429, 502, 503 or 504, the gRPC codes the specification lists, such as `UNAVAILABLE`, or no answer at all. The first retry waits about half a second, and each later one twice as long, up to 5 seconds, unless an HTTP receiver's `Retry-After` header asks for a different wait. oxtel gives up when the export's timeout would pass. Other failures, such as status 400 or 401, aren't retried, since sending the same data again wouldn't help.
 
 ## TLS with your own certificates
 
