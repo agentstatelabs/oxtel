@@ -142,11 +142,17 @@ async fn tool_calls_become_server_spans_that_continue_the_callers_trace() {
 async fn requests_without_the_callers_trace_start_their_own() {
     let h = harness();
     let (client, server) = connect(Instrumented::new(Tools).with_transport("pipe")).await;
+    let agreed = client.peer_info().unwrap().protocol_version.clone();
     client.call_tool(call("echo")).await.unwrap();
     client.cancel().await.unwrap();
     server.await.unwrap();
 
     let spans = h.spans.finished_spans();
+    // The version the session agreed on.
+    assert_eq!(
+        attr(named(&spans, "initialize"), "mcp.protocol.version"),
+        Some(&Value::from(agreed.as_str().to_string()))
+    );
     // rmcp runs the whole session in a span of its own; requests that carry
     // no trace of the caller's mustn't all join it.
     let session = named(&spans, "serve_inner");

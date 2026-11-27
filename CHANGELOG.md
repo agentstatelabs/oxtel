@@ -13,7 +13,7 @@ All notable changes to oxtel are recorded here. The format follows
 
 ### Fixed
 - **An MCP server span without the caller's trace now starts a trace of its own.** Before, it became a child of whatever span the transport ran it in. rmcp runs a whole stdio session, or an HTTP request, inside a span of its own, at `info`. So every request that didn't carry a trace of the client's, such as `initialize`, `tools/list` and tool calls from clients that don't propagate, joined one long trace.
-- **`mcp.protocol.version` is read from the request too**, as protocol 2026-07-28 sends it, when there was no `initialize` to take it from.
+- **`mcp.protocol.version` is the version the session agreed on.** Before, a server recorded the version the client's `initialize` asked for, which can differ: rmcp's HTTP client asks for 2026-07-28, and a server with sessions agrees on 2025-11-25. Without an `initialize`, it's read from the request, as protocol 2026-07-28 sends it.
 
 ## [0.4.0] - 2026-11-26
 

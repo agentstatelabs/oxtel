@@ -267,13 +267,18 @@ impl Operation {
 
     /// Record how it ended on the span and in the duration metric.
     fn finish(
-        self,
+        mut self,
         span: &tracing::Span,
         error: Option<&ErrorData>,
-        tool_error: bool,
+        outcome: Outcome,
         config: &Config,
         started: Instant,
     ) {
+        if let Some(version) = outcome.protocol_version {
+            span.record("mcp.protocol.version", version.as_str());
+            self.protocol_version = Some(version);
+        }
+        let tool_error = outcome.tool_error;
         let mut labels = config.metrics.then(|| self.labels());
         let fail = |error_type: String, labels: &mut Option<Vec<metrics::Label>>| {
             span.record("error.type", error_type.as_str());
@@ -302,13 +307,26 @@ impl Operation {
     }
 }
 
-/// Whether a tool's result is a failure, recording its content first when
-/// payloads are on.
-fn tool_failed(result: &CallToolResult, span: &tracing::Span, payloads: bool) -> bool {
-    if payloads {
-        span.record("gen_ai.tool.call.result", payload(&result.content).as_str());
+/// What a successful result says about the operation.
+#[derive(Default)]
+struct Outcome {
+    /// The result is a tool's failure.
+    tool_error: bool,
+    /// The protocol version `initialize` agreed on.
+    protocol_version: Option<String>,
+}
+
+impl Outcome {
+    /// A tool's result, recording its content first when payloads are on.
+    fn tool(result: &CallToolResult, span: &tracing::Span, payloads: bool) -> Self {
+        if payloads {
+            span.record("gen_ai.tool.call.result", payload(&result.content).as_str());
+        }
+        Outcome {
+            tool_error: result.is_error == Some(true),
+            ..Outcome::default()
+        }
     }
-    result.is_error == Some(true)
 }
 
 /// What both wrappers share: from a request or notification to its span,
@@ -322,10 +340,19 @@ impl<S> Instrumented<S> {
         extract_trace_context(&MetaReader(meta))
     }
 
-    /// Note that the session started, with this protocol version.
-    fn initializing(&self, version: &ProtocolVersion) {
+    /// Note that the session is starting.
+    fn initializing(&self) {
         let _ = self.session_started.set(Instant::now());
+    }
+
+    /// Note the protocol version `initialize` agreed on, which may not be
+    /// the one the client asked for: it holds for the rest of the session.
+    fn agreed(&self, version: &ProtocolVersion) -> Outcome {
         let _ = self.protocol_version.set(version.as_str().to_string());
+        Outcome {
+            protocol_version: Some(version.as_str().to_string()),
+            ..Outcome::default()
+        }
     }
 
     fn operation(
@@ -379,30 +406,25 @@ impl<S> Instrumented<S> {
         (operation, span)
     }
 
-    /// Run `inner` in `span`, then record how it ended. `tool_error` says
-    /// whether a result is a tool's failure.
+    /// Run `inner` in `span`, then record how it ended. `inspect` reads a
+    /// successful result, given the span and whether payloads are on.
     fn observe<'a, T: 'a>(
         &self,
         operation: Operation,
         span: tracing::Span,
         inner: impl Future<Output = Result<T, ErrorData>> + 'a,
-        tool_error: impl FnOnce(&T, &tracing::Span, bool) -> bool + 'a,
+        inspect: impl FnOnce(&T, &tracing::Span, bool) -> Outcome + 'a,
     ) -> impl Future<Output = Result<T, ErrorData>> + 'a {
         let config = Arc::clone(&self.config);
         let started = Instant::now();
         let recorded = span.clone();
         async move {
             let result = inner.await;
-            let failed_tool = result
-                .as_ref()
-                .is_ok_and(|r| tool_error(r, &recorded, config.payloads));
-            operation.finish(
-                &recorded,
-                result.as_ref().err(),
-                failed_tool,
-                &config,
-                started,
-            );
+            let outcome = match &result {
+                Ok(r) => inspect(r, &recorded, config.payloads),
+                Err(_) => Outcome::default(),
+            };
+            operation.finish(&recorded, result.as_ref().err(), outcome, &config, started);
             result
         }
         .instrument(span)
@@ -421,7 +443,7 @@ impl<S> Instrumented<S> {
                 inner.await;
                 Ok::<(), ErrorData>(())
             },
-            |_, _, _| false,
+            |_, _, _| Outcome::default(),
         );
         async move {
             let _ = observed.await;
@@ -435,8 +457,8 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
         request: ClientRequest,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ServerResult, ErrorData>> + Send + '_ {
-        if let ClientRequest::InitializeRequest(init) = &request {
-            self.initializing(&init.params.protocol_version);
+        if let ClientRequest::InitializeRequest(_) = &request {
+            self.initializing();
         }
         let (operation, span) = self.request(request.method(), Target::of(&request), &context);
         if self.config.payloads
@@ -453,8 +475,9 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
             span,
             inner,
             |result, span, payloads| match result {
-                ServerResult::CallToolResult(r) => tool_failed(r, span, payloads),
-                _ => false,
+                ServerResult::CallToolResult(r) => Outcome::tool(r, span, payloads),
+                ServerResult::InitializeResult(r) => self.agreed(&r.protocol_version),
+                _ => Outcome::default(),
             },
         )
     }
@@ -476,7 +499,7 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
         };
         let (operation, span) = self.notification(&method, &context);
         let inner = self.inner.handle_notification(notification, context);
-        self.observe(operation, span, inner, |_, _, _| false)
+        self.observe(operation, span, inner, |_, _, _| Outcome::default())
     }
 
     fn get_info(&self) -> <RoleServer as rmcp::service::ServiceRole>::Info {
@@ -575,7 +598,7 @@ macro_rules! request {
                 operation,
                 span,
                 self.0.inner.$name(request, context),
-                |_, _, _| false,
+                |_, _, _| Outcome::default(),
             )
         }
     };
@@ -593,7 +616,7 @@ macro_rules! bare_request {
                 .request(<$method>::VALUE, Target::default(), &context);
             self.0
                 .observe(operation, span, self.0.inner.$name(context), |_, _, _| {
-                    false
+                    Outcome::default()
                 })
         }
     };
@@ -624,7 +647,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
         request: InitializeRequestParams,
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<InitializeResult, ErrorData>> + MaybeSendFuture + '_ {
-        self.0.initializing(&request.protocol_version);
+        self.0.initializing();
         let (operation, span) =
             self.0
                 .request(InitializeResultMethod::VALUE, Target::default(), &context);
@@ -632,7 +655,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             operation,
             span,
             self.0.inner.initialize(request, context),
-            |_, _, _| false,
+            |result, _, _| self.0.agreed(&result.protocol_version),
         )
     }
 
@@ -667,7 +690,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             operation,
             span,
             self.0.inner.set_level(request, context),
-            |_, _, _| false,
+            |_, _, _| Outcome::default(),
         )
     }
     request!(
@@ -732,7 +755,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             operation,
             span,
             self.0.inner.subscribe(request, context),
-            |_, _, _| false,
+            |_, _, _| Outcome::default(),
         )
     }
 
@@ -751,7 +774,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             operation,
             span,
             self.0.inner.unsubscribe(request, context),
-            |_, _, _| false,
+            |_, _, _| Outcome::default(),
         )
     }
 
@@ -778,8 +801,8 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             span,
             self.0.inner.call_tool(request, context),
             |response, span, payloads| match response {
-                CallToolResponse::Complete(r) => tool_failed(r, span, payloads),
-                _ => false,
+                CallToolResponse::Complete(r) => Outcome::tool(r, span, payloads),
+                _ => Outcome::default(),
             },
         )
     }
@@ -805,7 +828,7 @@ impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
             operation,
             span,
             self.0.inner.on_custom_request(request, context),
-            |_, _, _| false,
+            |_, _, _| Outcome::default(),
         )
     }
 

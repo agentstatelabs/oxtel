@@ -60,8 +60,11 @@ fn named<'a>(spans: &'a [SpanData], name: &str) -> &'a SpanData {
 /// Serve `Tools`, instrumented, at /mcp on a port of its own, and call
 /// `echo` and `broken` through an rmcp client, `echo` with a trace of the
 /// caller's. The client asks for `protocol`, or rmcp's latest. Returns the
-/// server's spans and the caller's ids.
-async fn call_over_http(protocol: Option<ProtocolVersion>) -> (Vec<SpanData>, TraceId, SpanId) {
+/// server's spans, the caller's ids, and the protocol version the client
+/// and server agreed on.
+async fn call_over_http(
+    protocol: Option<ProtocolVersion>,
+) -> (Vec<SpanData>, TraceId, SpanId, String) {
     let spans = InMemorySpanExporter::default();
     let traces = TracerProvider::builder()
         .with_resource(Resource::builder().without_env().build())
@@ -87,6 +90,12 @@ async fn call_over_http(protocol: Option<ProtocolVersion>) -> (Vec<SpanData>, Tr
         config.protocol_version = protocol;
     }
     let client = config.serve(transport).await.expect("client connects");
+    let agreed = client
+        .peer_info()
+        .expect("initialized")
+        .protocol_version
+        .as_str()
+        .to_string();
     let (trace_id, span_id) = (TraceId::random(), SpanId::random());
     let mut echo = CallToolRequestParams::new("echo");
     let mut meta = RequestMetaObject::new();
@@ -100,12 +109,12 @@ async fn call_over_http(protocol: Option<ProtocolVersion>) -> (Vec<SpanData>, Tr
         .unwrap();
     client.cancel().await.unwrap();
     server.abort();
-    (spans.finished_spans(), trace_id, span_id)
+    (spans.finished_spans(), trace_id, span_id, agreed)
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn tool_calls_over_http_continue_the_callers_trace() {
-    let (spans, trace_id, span_id) = call_over_http(None).await;
+    let (spans, trace_id, span_id, agreed) = call_over_http(None).await;
     let echo = named(&spans, "tools/call echo");
     assert_eq!(echo.kind, SpanKind::Server);
     assert_eq!(echo.context.trace_id, trace_id);
@@ -121,7 +130,15 @@ async fn tool_calls_over_http_continue_the_callers_trace() {
         assert_eq!(text(echo, key).as_deref(), Some(value), "{key}");
     }
     assert!(attr(echo, "jsonrpc.request.id").is_some());
-    assert!(attr(echo, "mcp.protocol.version").is_some());
+    // The version the session agreed on, not the one the client asked for.
+    for span in [named(&spans, "initialize"), echo] {
+        assert_eq!(
+            text(span, "mcp.protocol.version").as_deref(),
+            Some(agreed.as_str()),
+            "{}",
+            span.name
+        );
+    }
     assert!(attr(echo, "error.type").is_none());
 
     let broken = named(&spans, "tools/call broken");
@@ -136,7 +153,7 @@ async fn tool_calls_over_http_continue_the_callers_trace() {
 async fn sessions_over_http_are_recorded() {
     // Before 2026-07-28, a client starts a session with `initialize`, and
     // the server names it in the Mcp-Session-Id header.
-    let (spans, _, _) = call_over_http(Some(ProtocolVersion::V_2025_11_25)).await;
+    let (spans, _, _, _) = call_over_http(Some(ProtocolVersion::V_2025_11_25)).await;
     let initialize = named(&spans, "initialize");
     assert_eq!(initialize.parent_span_id, None);
     let echo = named(&spans, "tools/call echo");
