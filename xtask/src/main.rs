@@ -13,6 +13,7 @@
 //!   since the site shows those files as their output. `--bless` rewrites
 //!   the files from a fresh run.
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
@@ -296,8 +297,10 @@ fn dependency_names(block: &str) -> impl Iterator<Item = &str> {
 /// what it writes to standard error with `OXTEL_LOG_FORMAT=<format>`
 /// (`text`, `json` or `ecs`) and nothing else set; `<example>.spans` is
 /// what it writes to standard output with `OTEL_TRACES_EXPORTER=console`
-/// and no log lines, its spans. Timestamps, trace and span ids and span
-/// durations change on every run, so they're compared by their shape alone.
+/// and no log lines, its spans. A program that reads standard input gets
+/// `examples/input/<example>.jsonl` there. Timestamps, trace and span ids
+/// and request durations change on every run, so they're compared by their
+/// shape alone.
 fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
@@ -353,7 +356,22 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             run.env("OXTEL_LOG_FORMAT", format);
         }
-        let output = run.output()?;
+        // A program that reads standard input, such as an MCP server over
+        // stdio, gets `examples/input/<example>.jsonl` there.
+        let input = root.join("examples/input").join(format!("{example}.jsonl"));
+        let output = if input.is_file() {
+            run.stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
+            let mut child = run.spawn()?;
+            let mut stdin = child.stdin.take().expect("stdin is piped");
+            stdin.write_all(&std::fs::read(&input)?)?;
+            // Closing standard input ends the session.
+            drop(stdin);
+            child.wait_with_output()?
+        } else {
+            run.output()?
+        };
         if !output.status.success() {
             return Err(format!("examples/{example}.rs failed: {}", output.status).into());
         }
@@ -384,8 +402,10 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
 
 /// `text` with each timestamp (`2026-10-09T12:00:00.123456Z`) replaced by
 /// `<time>`, each trace or span id (32 or 16 lowercase hex digits) by
-/// `<id>`, and each span's duration (`duration=0.042ms`) by
-/// `duration=<duration>`.
+/// `<id>`, each span's duration (`duration=0.042ms`) by
+/// `duration=<duration>`, and the request duration on an access log line
+/// (`http.server.request.duration=0.000044`, or in JSON
+/// `"http.server.request.duration":0.000044`) by `<duration>`.
 fn shape(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -400,6 +420,12 @@ fn shape(text: &str) -> String {
             }
             if let Some(len) = duration_len(&bytes[i..]) {
                 out.push_str("duration=<duration>");
+                i += len;
+                continue;
+            }
+            if let Some((key, len)) = request_duration_len(&bytes[i..]) {
+                out.push_str(&text[i..i + key]);
+                out.push_str("<duration>");
                 i += len;
                 continue;
             }
@@ -459,6 +485,22 @@ fn duration_len(bytes: &[u8]) -> Option<usize> {
     (number > 0 && bytes[len..].starts_with(b"ms")).then_some(len + 2)
 }
 
+/// The length of the access log's request duration that `bytes` starts
+/// with, if any: the key with its `=` or `":`, and the whole.
+fn request_duration_len(bytes: &[u8]) -> Option<(usize, usize)> {
+    const KEY: &[u8] = b"http.server.request.duration";
+    let rest = bytes.strip_prefix(KEY)?;
+    let separator = [b"=".as_slice(), b"\":".as_slice()]
+        .into_iter()
+        .find(|separator| rest.starts_with(separator))?;
+    let key = KEY.len() + separator.len();
+    let number = bytes[key..]
+        .iter()
+        .take_while(|b| b.is_ascii_digit() || matches!(b, b'.' | b'e' | b'-'))
+        .count();
+    (number > 0).then_some((key, key + number))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -486,6 +528,17 @@ mod tests {
                 r#"2026-11-20T20:25:17.000001Z span "SELECT orders" kind=client status=unset duration=0.042ms trace_id=7ecfce50f920491ee1086c2912891261"#
             ),
             r#"<time> span "SELECT orders" kind=client status=unset duration=<duration> trace_id=<id>"#
+        );
+        // An access log line's request duration, as text and as JSON.
+        assert_eq!(
+            shape(
+                "request http.response.status_code=200 http.server.request.duration=0.000044 trace_id=7ecfce50f920491ee1086c2912891261"
+            ),
+            "request http.response.status_code=200 http.server.request.duration=<duration> trace_id=<id>"
+        );
+        assert_eq!(
+            shape(r#"{"http.server.request.duration":4.4e-5,"message":"request"}"#),
+            r#"{"http.server.request.duration":<duration>,"message":"request"}"#
         );
         // Not a span's duration: a field of the program's own.
         assert_eq!(

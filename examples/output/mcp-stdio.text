@@ -1,0 +1,2 @@
+2026-11-27T16:32:40.210552Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-27T16:32:40.213703Z  INFO tools/call add: mcp_stdio: adding a=2 b=3 trace_id=4bf92f3577b34da6a3ce929d0e0e4736 span_id=03e420669a7a3fc7

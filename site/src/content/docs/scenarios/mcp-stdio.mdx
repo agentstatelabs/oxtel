@@ -1,0 +1,81 @@
+---
+title: An MCP server over stdio
+description: A local MCP tool server where every request gets a span that continues the client's trace, with log lines kept off the protocol's standard output.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+An MCP server that a client starts as a program of its own and talks to over standard input and output, as most local tool servers run. Every request gets:
+
+- a span named for what it asks, such as `tools/call add`, which continues the client's trace when the client sends one;
+- that trace id, and the request's fields, on every log line the tool writes;
+- its duration in `mcp.server.operation.duration`, and the session's in `mcp.server.session.duration` when the session ends.
+
+Standard output carries the protocol, so nothing else may be written there. oxtel writes log lines to standard error unless told otherwise, so the server works as it is.
+
+## The code
+
+<Example file="examples/mcp-stdio.rs" />
+
+## Dependencies
+
+<Example file="examples/mcp-stdio.rs" doc="toml" />
+
+## Run it
+
+A client starts the server and writes requests to it. To stand in for one, this command, run from a checkout of [the repository](https://github.com/agentstatelabs/oxtel), sends the server a short session from a file:
+
+<Example file="examples/mcp-stdio.rs" doc="bash" />
+
+The session starts, asks for the server's tools, and calls `add`:
+
+<Example file="examples/input/mcp-stdio.jsonl" wrap />
+
+The call to `add` carries a `traceparent` in its `_meta`: that's how an MCP client sends its trace along. When standard input closes, the session ends and the server stops.
+
+## What it prints
+
+The server's answers go to standard output, for the client. Its log lines go to standard error:
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/mcp-stdio.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/mcp-stdio.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+- The line from `add` has the trace id the client sent, `4bf92f3577b34da6a3ce929d0e0e4736`. The server's span continues the client's trace, so a backend shows the tool's work inside the client's call.
+- In JSON, the line also carries the request's fields: the method, the tool, the protocol version and `network.transport`.
+- The other requests wrote no log lines, but each still got a span: `initialize`, `notifications/initialized` and `tools/list`, each a trace of its own, since they didn't carry the client's.
+- rmcp's own lines aren't there: the program keeps rmcp to its warnings, as [For production](#for-production) explains.
+
+CI runs the example with this session and checks it still prints these lines.
+
+## What's recorded
+
+The names follow the OpenTelemetry conventions for MCP, which are still in development.
+
+| | |
+|---|---|
+| Span name | The method, and the tool, prompt or resource it's for, such as `tools/call add` |
+| `mcp.method.name` | `tools/call` |
+| `jsonrpc.request.id` | The request's id; notifications have none |
+| `mcp.protocol.version` | The protocol version the session agreed on |
+| `gen_ai.tool.name` | For a tool call, the tool, with `gen_ai.operation.name` set to `execute_tool` |
+| `network.transport` | `pipe`, from `with_transport("pipe")` |
+| `error.type` | `tool_error` when a tool reports a failure, or the JSON-RPC error code when the server fails |
+| `mcp.server.operation.duration` | A histogram of each request's duration in seconds |
+| `mcp.server.session.duration` | The session's duration in seconds, when it ends |
+
+Tool arguments and results aren't recorded, since they may hold personal or secret data. `.with_payloads(true)` records them, cut at 16 KiB, as `gen_ai.tool.call.arguments` and `gen_ai.tool.call.result`.
+
+## For production
+
+- **Keep standard output for the protocol.** Don't set `OXTEL_LOG_OUTPUT=stdout`, and don't turn on the console exporters, such as `OTEL_TRACES_EXPORTER=console`: they print on standard output, and the client would try to read what they print as protocol messages.
+- **Configure it in the client.** The client starts the server, so the server's environment comes from the client's settings for it. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` there. Many clients keep what the server writes to standard error in a log of their own.
+- **Keep rmcp to its warnings.** rmcp logs each session's start and end at `info`, in a span of its own that lasts the whole session, and every request that doesn't continue a trace of the client's would be part of that one long trace. The example keeps rmcp to its warnings unless `RUST_LOG` is set; if you set `RUST_LOG`, include `rmcp=warn`.
+- **Let the session end.** The server stops when the client closes its standard input, and `main` returning sends what's left. A client that kills the server instead loses what hasn't been sent yet, the last few seconds.
+- **Callers' trace ids.** The server continues any trace a client sends. For a server that untrusted clients reach, `.with_propagation(false)` starts a new trace for every request instead.

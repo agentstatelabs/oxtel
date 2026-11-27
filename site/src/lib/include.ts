@@ -31,6 +31,8 @@ const LANGUAGES: Record<string, string> = {
 	yml: 'yaml',
 	sh: 'bash',
 	json: 'json',
+	// What an example reads on standard input, in examples/input/.
+	jsonl: 'json',
 	// What an example prints, in examples/output/, by OXTEL_LOG_FORMAT, and
 	// its spans from the console exporter.
 	text: 'text',

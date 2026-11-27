@@ -1,0 +1,5 @@
+2026-11-27T16:32:42.059883Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-27T16:32:42.063295Z  INFO GET /stock/{item}: two_services: counting stock item=tea trace_id=72e83dea387e446510924e5620070025 span_id=09e3ca5147bbceb4
+2026-11-27T16:32:42.063327Z  INFO GET /stock/{item}: oxtel_tower::server: request http.response.status_code=200 http.server.request.duration=0.000039917 trace_id=72e83dea387e446510924e5620070025 span_id=09e3ca5147bbceb4
+2026-11-27T16:32:42.063545Z  INFO GET /orders/{item}: two_services: taking order item=tea stock=12 trace_id=72e83dea387e446510924e5620070025 span_id=e9d8a25ce59824c8
+2026-11-27T16:32:42.063568Z  INFO GET /orders/{item}: oxtel_tower::server: request http.response.status_code=200 http.server.request.duration=0.000703541 trace_id=72e83dea387e446510924e5620070025 span_id=e9d8a25ce59824c8

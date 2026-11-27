@@ -12,10 +12,16 @@ metrics = "0.24"
 oxtel = { path = "../crates/oxtel" }
 oxtel-otlp = { path = "../crates/oxtel-otlp" }
 oxtel-prometheus = { path = "../crates/oxtel-prometheus" }
+oxtel-reqwest = { path = "../crates/oxtel-reqwest" }
+oxtel-rmcp = { path = "../crates/oxtel-rmcp" }
 oxtel-sdk = { path = "../crates/oxtel-sdk" }
 oxtel-sql = { path = "../crates/oxtel-sql", features = ["rusqlite"] }
 oxtel-tower = { path = "../crates/oxtel-tower", features = ["axum"] }
+reqwest = { version = "0.13", default-features = false }
+rmcp = { version = "3.5", features = ["transport-io"] }
 rusqlite = { version = "0.39", features = ["bundled"] }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
 # The library in the library scenario, which uses tracing and metrics alone.
 shipping = { path = "shipping" }
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
@@ -49,6 +55,14 @@ path = "worker.rs"
 [[example]]
 name = "database"
 path = "database.rs"
+
+[[example]]
+name = "mcp-stdio"
+path = "mcp-stdio.rs"
+
+[[example]]
+name = "two-services"
+path = "two-services.rs"
 
 [[example]]
 name = "prometheus"
