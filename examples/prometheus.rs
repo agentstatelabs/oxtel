@@ -20,9 +20,11 @@
 use std::time::Duration;
 
 fn main() -> Result<(), oxtel::Error> {
+    // ANCHOR: setup
     // First, so the metrics below find oxtel's recorder. The guard keeps
     // the endpoint running.
     let _telemetry = oxtel::init()?;
+    // ANCHOR_END: setup
 
     // Units and descriptions, for the scrape's `# UNIT` and `# HELP` lines.
     metrics::describe_counter!("orders.placed", "Orders placed, by channel.");

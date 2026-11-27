@@ -103,6 +103,14 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Moving to oxtel',
+					items: [
+						{ label: "From tracing-subscriber's fmt", slug: 'migrate/fmt' },
+						{ label: 'From the OpenTelemetry SDK', slug: 'migrate/opentelemetry' },
+						{ label: 'From metrics-exporter-prometheus', slug: 'migrate/prometheus' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'What works with what', slug: 'reference/integrations' },

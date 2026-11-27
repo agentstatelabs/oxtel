@@ -50,6 +50,10 @@ name = "service"
 path = "service.rs"
 
 [[example]]
+name = "propagation"
+path = "propagation.rs"
+
+[[example]]
 name = "cli"
 path = "cli.rs"
 

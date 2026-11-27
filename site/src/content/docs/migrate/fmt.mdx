@@ -1,0 +1,56 @@
+---
+title: From tracing-subscriber's fmt
+description: Swapping tracing-subscriber's fmt for oxtel, a one-line change, what changes in the output, and the settings that keep the old behaviour.
+---
+
+import Example from '../../../components/Example.astro';
+
+A program that logs with `tracing_subscriber::fmt()` moves to oxtel by changing the line that sets logging up. Every `tracing` call stays as it is. In return, the same program can send traces, metrics and logs to a collector later, with no further code changes.
+
+## The change
+
+The dependencies, before and after:
+
+<Example file="examples/migration/fmt.rs" doc="toml" title="Before" />
+
+<Example file="examples/logs.rs" doc="toml" title="After" />
+
+The setup, before and after:
+
+<Example file="examples/migration/fmt.rs" region="setup" title="Before: examples/migration/fmt.rs" />
+
+<Example file="examples/logs.rs" region="setup" title="After: examples/logs.rs" />
+
+`oxtel::init()` returns a guard: keep it until the program ends, since dropping it shuts telemetry down. It returns an error if another subscriber is already installed, so `main` returns a `Result`.
+
+## What changes in the output
+
+Run on the same program, the two differ in four ways:
+
+- **Standard error, not standard output.** oxtel leaves standard output to the program, for a command-line tool's results or an MCP server's protocol. `OXTEL_LOG_OUTPUT=stdout` puts lines back on standard output.
+- **`info` by default.** With `RUST_LOG` unset, `EnvFilter::from_default_env()` lets through only errors, and the program above prints nothing; oxtel prints `info` and above. `RUST_LOG` directives mean the same in both.
+- **JSON when the output isn't a terminal.** fmt writes text everywhere, with color codes even in a file. oxtel writes text on a terminal and one JSON object per line anywhere else, for log shippers. `OXTEL_LOG_FORMAT=text` keeps text.
+- **A few details of the text.** The layout is fmt's. Lines inside a span carry its trace and span ids, string values aren't quoted, and oxtel's first line says where everything goes.
+
+The program above, on a terminal:
+
+<Example file="examples/output/logs.text" title="Standard error" wrap />
+
+And anywhere else:
+
+<Example file="examples/output/logs.json" title="Standard error" wrap />
+
+## If you customised fmt
+
+| With fmt | With oxtel |
+|---|---|
+| `.with_writer(std::io::stdout)` | `OXTEL_LOG_OUTPUT=stdout`, or `.with_local_logs_output(oxtel::LogOutput::Stdout)` on `oxtel::builder()` |
+| `.json()` | `OXTEL_LOG_FORMAT=json`, or `.with_local_logs(oxtel::sdk::logs::LocalFormat::Json)` |
+| A default filter, such as `EnvFilter::new("info,hyper=warn")` | `.with_local_logs_filter("info,hyper=warn")`, which `RUST_LOG` overrides |
+| Other layers, with `tracing_subscriber::registry().with(...)` | `.with_layer(...)`, for each |
+
+Then `.install()` in place of `oxtel::init()`. [Every setting](/reference/settings/#local-log-lines) lists the variables, and [the API documentation](https://docs.rs/oxtel/latest/oxtel/struct.Builder.html) the builder's methods.
+
+## How it's checked
+
+CI builds the "before" program with exactly the dependencies shown, and runs the "after" program, `examples/logs.rs`, comparing what it prints with the output above.

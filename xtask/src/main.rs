@@ -5,9 +5,9 @@
 //! - `cargo run -p xtask -- gen-semconv` regenerates `oxtel-semconv` with
 //!   OpenTelemetry Weaver ([`WEAVER_VERSION`], found as `$WEAVER` or `weaver`
 //!   on the path) from the pinned conventions releases.
-//! - `cargo run -p xtask -- check-examples` builds each example that lists
-//!   its dependencies as a program of its own, with only those
-//!   dependencies.
+//! - `cargo run -p xtask -- check-examples` builds each example, and each
+//!   program in `examples/migration/`, that lists its dependencies as a
+//!   program of its own, with only those dependencies.
 //! - `cargo run -p xtask -- gen-settings` writes the site's settings page
 //!   from the table in `settings.rs`, and `check-settings` checks that
 //!   table against the code and the page against the table.
@@ -227,27 +227,43 @@ fn gen_semconv() -> Result<(), Box<dyn std::error::Error>> {
 /// too, so a block's `[dev-dependencies]` are checked as well. The oxtel
 /// crates come from this checkout, and a `path` dependency is found from
 /// `examples/`, as `examples/Cargo.toml` finds it.
+///
+/// The programs in `examples/migration/` are checked the same way. They're
+/// the "before" side of the site's migration guides, built on other crates,
+/// so they aren't examples of the workspace, whose dependencies they'd add
+/// to every example's build.
 fn check_examples() -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
     let work = root.join("target/example-check");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-    let mut examples: Vec<PathBuf> = std::fs::read_dir(root.join("examples"))?
-        .filter_map(|entry| entry.ok().map(|entry| entry.path()))
-        .filter(|path| path.extension().is_some_and(|ext| ext == "rs"))
-        .collect();
+    let mut examples: Vec<PathBuf> = Vec::new();
+    for dir in ["examples", "examples/migration"] {
+        examples.extend(
+            std::fs::read_dir(root.join(dir))?
+                .filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                .filter(|path| path.extension().is_some_and(|ext| ext == "rs")),
+        );
+    }
     examples.sort();
     let mut checked = 0;
     for path in examples {
         let source = std::fs::read_to_string(&path)?;
-        let example = path
+        let stem = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("example");
+        let migration = path.parent().is_some_and(|dir| dir.ends_with("migration"));
+        let example = if migration {
+            format!("migration/{stem}")
+        } else {
+            stem.to_string()
+        };
         for (i, dependencies) in documented_dependencies(&source).into_iter().enumerate() {
             // The first list builds as `logs`, a second as `logs-2`, and so on.
+            let base = example.replace('/', "-");
             let name = match i {
-                0 => example.to_string(),
-                _ => format!("{example}-{}", i + 1),
+                0 => base,
+                _ => format!("{base}-{}", i + 1),
             };
             let dir = work.join(&name);
             std::fs::create_dir_all(dir.join("src"))?;
