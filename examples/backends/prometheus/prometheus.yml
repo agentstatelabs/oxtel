@@ -1,0 +1,9 @@
+global:
+  # Prometheus's default is a minute; this is quicker to try out.
+  scrape_interval: 5s
+
+scrape_configs:
+  # A program on your machine serving /metrics on oxtel's port, 9464.
+  - job_name: app
+    static_configs:
+      - targets: ["host.docker.internal:9464"]

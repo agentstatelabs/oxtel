@@ -159,6 +159,17 @@ jobs:
         if: always()
         run: docker logs otelcol 2>&1 | tail -100
 
+  # The stack on each of the site's backend pages, sent the worker example's
+  # telemetry with the settings the page shows: the backend must have it.
+  # See examples/backends/run.sh.
+  backends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Each backend gets the telemetry its page says it will
+        run: examples/backends/run.sh
+
   # oxtel-semconv is generated: regenerating it with the pinned Weaver and
   # conventions must change nothing.
   semconv:

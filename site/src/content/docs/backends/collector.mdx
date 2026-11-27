@@ -1,0 +1,38 @@
+---
+title: The OpenTelemetry Collector
+description: A Collector between your programs and your backends, to batch, retry, filter and send telemetry on, with your programs knowing only its address.
+---
+
+import Example from '../../../components/Example.astro';
+
+The OpenTelemetry Collector is a program that sits between your programs and your backends. Programs send it OTLP, and it sends their telemetry on: to one backend or several, each in its own protocol, after filtering or enriching it as its configuration says. Your programs need to know only its address, so changing backends, or the credentials they need, means changing the Collector's configuration and nothing else.
+
+## Run it
+
+The files are in the repository's `examples/backends/collector/`; run `docker compose up -d` there.
+
+<Example file="examples/backends/collector/compose.yaml" />
+
+The configuration takes OTLP over HTTP and gRPC, and prints what arrives:
+
+<Example file="examples/backends/collector/collector.yaml" />
+
+## Send to it
+
+Set these where your program runs, then start it:
+
+<Example file="examples/backends/collector/settings.sh" />
+
+`docker compose logs -f collector` shows each span, metric and log record as it arrives, with every attribute.
+
+## Sending it on
+
+To send to a backend, add the backend's exporter to `exporters`, and list it in each pipeline that should use it. Most backends take OTLP, which the `otlphttp` exporter in the comments sends: give it the backend's endpoint and the headers it asks for. The contrib image used here has exporters for most others too.
+
+- **Keep credentials in the Collector.** A header written as `${env:BACKEND_TOKEN}` is read from the Collector's environment, so the key isn't in the file, and isn't in any of your programs.
+- **In Kubernetes,** a Collector usually runs on each node or as a service, and programs send to its address, such as `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`.
+- **What else it does:** batching, retries and queueing on its side; dropping or renaming attributes; sampling whole traces once they're complete. The [Collector's documentation](https://opentelemetry.io/docs/collector/) covers each.
+
+## How it's checked
+
+On every change, CI starts this stack, runs [the background worker](/scenarios/worker/) with these settings, and looks for its job spans, its `jobs.processed` metric and its failed job's log record in what the Collector printed. `check.sh`, beside the compose file, has the checks. [The conformance tests](https://github.com/agentstatelabs/oxtel/blob/main/conformance/README.md) check much more against a Collector: that every field arrives intact, over each protocol.

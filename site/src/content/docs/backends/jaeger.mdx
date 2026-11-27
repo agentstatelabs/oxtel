@@ -1,0 +1,30 @@
+---
+title: Jaeger
+description: Traces in Jaeger, from one container, with one setting.
+---
+
+import Example from '../../../components/Example.astro';
+
+Jaeger shows traces: each request as a timeline of its spans, across every service it passed through. It takes OTLP itself, so oxtel sends to it directly. It keeps traces only, so metrics and logs go elsewhere: an [OpenTelemetry Collector](/backends/collector/) in front can send each kind to its own place.
+
+## Run it
+
+One container, keeping traces in memory. The file is in the repository's `examples/backends/jaeger/`; run `docker compose up -d` there.
+
+<Example file="examples/backends/jaeger/compose.yaml" />
+
+## Send to it
+
+Set these where your program runs, then start it:
+
+<Example file="examples/backends/jaeger/settings.sh" />
+
+Open http://localhost:16686, choose your service, here `worker`, and find its traces. A trace that crosses services, such as [two services](/scenarios/two-services/), shows both in one timeline.
+
+- **Only traces.** Setting just the traces endpoint sends traces and nothing else. With `OTEL_EXPORTER_OTLP_ENDPOINT` instead, oxtel would send metrics and logs too, Jaeger would refuse them, and oxtel would warn that sending them fails.
+- **gRPC** works too, on port 4317: build with oxtel's `grpc` feature, set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, and set `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT=http://localhost:4317`.
+- **Memory only.** This Jaeger forgets everything when it stops. A Jaeger that keeps traces needs a storage backend, which its own documentation covers.
+
+## How it's checked
+
+On every change, CI starts this stack, runs [the background worker](/scenarios/worker/) with these settings, and asks Jaeger's API for the worker's four job spans. `check.sh`, beside the compose file, has the queries.

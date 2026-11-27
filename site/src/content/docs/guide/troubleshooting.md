@@ -3,7 +3,7 @@ title: When something's wrong
 description: What to check, by symptom, when log lines are missing, nothing arrives at the collector, some telemetry is dropped, or there's too much output.
 ---
 
-Start with what oxtel logs from the target `oxtel`. When it starts, one line says where log lines go and where traces, metrics and logs are sent, and any setting it couldn't use follows as a warning. When sending fails, a warning says where, why and what to check, at most once a minute per kind of telemetry, and another line says when sending works again. These lines appear in your local logs, but are never sent to the collector themselves.
+Start with what oxtel logs from the target `oxtel`. When it starts, one line says where log lines go and where traces, metrics and logs are sent, and any setting it couldn't use follows as a warning. When sending fails, a warning says where, why and what to check, at most once a minute per kind of telemetry, and another line says when sending works again. Those two appear only in your local logs, never at the collector, since they would travel the way that's failing. The startup line and the warnings about settings are log records like any other, and are sent too.
 
 ## No log lines at all
 

@@ -1,6 +1,6 @@
 ---
 title: Recipes
-description: A few settings, or a few lines of code, for common situations, from JSON logs in a container to Elastic, hosted backends, Prometheus, web services and MCP servers.
+description: A few settings, or a few lines of code, for common situations, from JSON logs in a container to backends, web services and MCP servers.
 ---
 
 import Example from '../../../components/Example.astro';
@@ -11,31 +11,16 @@ Each recipe is a few settings, or a few lines of code, for one common situation.
 
 Nothing to do: when standard error isn't a terminal, oxtel writes one JSON object per line, which every log shipper understands. To be explicit, set `OXTEL_LOG_FORMAT=json`. If your platform only collects standard output, set `OXTEL_LOG_OUTPUT=stdout`.
 
-## Elastic
+## A backend
 
-Either ship the log lines, or send everything over OTLP:
+Sending to a backend is a matter of settings. [Backends](/backends/) has a page for each common one, with a stack to run on your machine and the settings that send to it:
 
-- **Log lines:** `OXTEL_LOG_FORMAT=ecs` writes the Elastic Common Schema, which Elastic Agent and Filebeat read without any mapping.
-- **OTLP:** set `OTEL_EXPORTER_OTLP_ENDPOINT` to your deployment's OTLP endpoint, and `OTEL_EXPORTER_OTLP_HEADERS` to the authorization header it gives you, such as `Authorization=ApiKey <key>`.
-
-## A hosted backend
-
-Hosted backends give you an endpoint and a key. Set both, and name your service:
-
-```bash
-OTEL_SERVICE_NAME=shop \
-OTEL_EXPORTER_OTLP_ENDPOINT=https://otlp.example.com \
-OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>" \
-  ./shop
-```
-
-The startup line shows where everything goes; it never shows the headers.
-
-## Prometheus
-
-`OTEL_METRICS_EXPORTER=prometheus` serves your metrics at `http://localhost:9464/metrics` for Prometheus to scrape. In a container, also set `OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0` so the scraper can reach it. To serve `/metrics` from your own axum router instead, see `oxtel_tower::MetricsService`.
-
-[Prometheus scraping only](/scenarios/prometheus/) has the whole program.
+- [Elastic](/backends/elastic/): over OTLP to APM Server, or as log lines in the Elastic Common Schema with `OXTEL_LOG_FORMAT=ecs`.
+- [Grafana, Tempo and Loki](/backends/grafana/): traces, logs and metrics, each to the store that keeps it.
+- [Hosted backends](/backends/hosted/): an endpoint and a key in a header.
+- [Jaeger](/backends/jaeger/): traces.
+- [The OpenTelemetry Collector](/backends/collector/): one address for your programs, sending on to any backend.
+- [Prometheus](/backends/prometheus/): metrics, scraped from oxtel's `/metrics` or pushed over OTLP.
 
 ## A web service
 

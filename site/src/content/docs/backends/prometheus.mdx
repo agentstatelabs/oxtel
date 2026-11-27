@@ -1,0 +1,51 @@
+---
+title: Prometheus
+description: Metrics in Prometheus, scraped from oxtel's /metrics or pushed over OTLP, and how their names change on the way.
+---
+
+import Example from '../../../components/Example.astro';
+
+Prometheus keeps metrics and answers queries about them. It gets them two ways, and oxtel does both:
+
+- **Scraping:** Prometheus fetches `/metrics` from each program every few seconds. Best for services that run all the time, and needs nothing but oxtel, without its default features.
+- **Pushing over OTLP:** the program sends its metrics to Prometheus, as it would to any backend. Best for programs that don't run long enough to be scraped, such as jobs and command-line tools, and for programs Prometheus can't reach.
+
+## Run it
+
+The files are in the repository's `examples/backends/prometheus/`; run `docker compose up -d` there. Prometheus is then on http://localhost:9090.
+
+<Example file="examples/backends/prometheus/compose.yaml" />
+
+`--web.enable-otlp-receiver` turns on pushing over OTLP. The configuration has a scrape target, for a program on your machine:
+
+<Example file="examples/backends/prometheus/prometheus.yml" />
+
+## Scrape your program
+
+Set these where your program runs, then start it:
+
+<Example file="examples/backends/prometheus/scrape.sh" />
+
+oxtel serves `/metrics` on port 9464. Listening on every interface lets Prometheus reach it from its container, and lets anything on your network read it too, so in production listen on the address your Prometheus scrapes. To serve `/metrics` from your own axum router instead, use `oxtel_tower::MetricsService`. [Prometheus scraping only](/scenarios/prometheus/) has a whole program.
+
+## Or push over OTLP
+
+<Example file="examples/backends/prometheus/settings.sh" />
+
+Prometheus takes metrics only, so send only those, with the metrics endpoint alone. It expects totals, which is oxtel's default, so leave `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` unset.
+
+## The names in Prometheus
+
+Prometheus changes OpenTelemetry's names to its own conventions, the same way whichever way the metrics come:
+
+| In your code | In Prometheus |
+|---|---|
+| `jobs.processed`, a counter | `jobs_processed_total` |
+| `jobs.duration`, a histogram in seconds | `jobs_duration_seconds_bucket`, `_sum` and `_count` |
+| `OTEL_SERVICE_NAME=worker` | the label `job="worker"`, when pushed; scraped, `job` is the scrape's name |
+
+So `rate(jobs_processed_total{job="worker"}[5m])` is the worker's jobs a second. [Metrics for your backend](/guide/metrics/) covers histograms' buckets, and views that rename or drop a metric before it's sent.
+
+## How it's checked
+
+On every change, CI starts this stack, pushes [the background worker](/scenarios/worker/)'s metrics with the OTLP settings, runs the [scraping example](/scenarios/prometheus/) with the scrape settings, and queries Prometheus for both. `check.sh`, beside the compose file, has the queries. CI also checks oxtel's `/metrics` with Prometheus's own `promtool`.

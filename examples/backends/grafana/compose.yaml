@@ -1,0 +1,35 @@
+# Grafana on http://localhost:3000, showing traces kept by Tempo, logs kept
+# by Loki and metrics kept by Prometheus. Each of the three takes OTLP
+# itself, so nothing else sits in between.
+services:
+  tempo:
+    image: grafana/tempo:2.10.10
+    command: [-config.file=/etc/tempo.yaml]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml:ro
+    ports:
+      - "3200:3200" # Tempo's API
+      - "4318:4318" # OTLP over HTTP, for traces
+  loki:
+    image: grafana/loki:3.7.10
+    ports:
+      - "3100:3100" # Loki's API, and OTLP over HTTP for logs
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+    ports:
+      - "9090:9090" # Prometheus's API, and OTLP over HTTP for metrics
+  grafana:
+    image: grafana/grafana:13.3.1
+    environment:
+      # Signed in as an administrator with no password: for trying it out
+      # on your own machine only.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+    volumes:
+      - ./datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
+    ports:
+      - "3000:3000"
