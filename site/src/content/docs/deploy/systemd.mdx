@@ -1,0 +1,30 @@
+---
+title: As a systemd service
+description: A service run by systemd, with its log lines in the journal, its settings in an environment file, and a clean stop on SIGTERM.
+---
+
+import Example from '../../../components/Example.astro';
+
+On a Linux machine without containers, systemd runs services: it starts them at boot, restarts them when they fail, and keeps their output in the journal. The service here is [the one for containers](/deploy/docker/), built with `cargo build --release`: it stops cleanly on the SIGTERM systemd sends.
+
+The files are in the repository's `examples/deploy/systemd/`.
+
+## The unit
+
+<Example file="examples/deploy/systemd/shop.service" />
+
+- **Log lines** go to the journal. Its output isn't a terminal, so they're JSON, ready for a shipper that reads the journal. For lines that read well in `journalctl -u shop`, set `OXTEL_LOG_FORMAT=text`; the journal adds its own timestamp beside oxtel's.
+- **Stopping.** systemd sends SIGTERM and waits `TimeoutStopSec` before killing the service. The service stops at once, after sending what's pending, which waits up to 5 seconds when the receiver doesn't answer, so keep the timeout above that.
+- **A user of its own.** `DynamicUser` runs the service as a user made for it, and the `Protect` settings keep it from writing anywhere. oxtel needs no files of its own.
+
+## Its settings
+
+Settings that differ from machine to machine, such as where telemetry goes and the key it needs, go in the environment file the unit names. Only root reads it, so a key in it stays private:
+
+<Example file="examples/deploy/systemd/telemetry.env" />
+
+The file's endpoint expects a Collector on the same machine, which is a common setup: one Collector per machine, sending on to your [backends](/backends/), and holding their keys. Point it at a backend directly the same way.
+
+## How it's checked
+
+On every change, CI installs the service on its Linux runner with these files, after `systemd-analyze verify` checks the unit, and runs a Collector on `localhost:4318`. It starts the service, sends a request, and stops it with `systemctl stop`. The service must stop cleanly within seconds, its last line in the journal must say it stopped, and the request's span must reach the Collector. `check.sh`, in `examples/deploy/`, has the checks.

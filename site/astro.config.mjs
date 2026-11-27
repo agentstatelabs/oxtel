@@ -95,6 +95,14 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Deploying',
+					items: [
+						{ label: 'In a container', slug: 'deploy/docker' },
+						{ label: 'On Kubernetes', slug: 'deploy/kubernetes' },
+						{ label: 'As a systemd service', slug: 'deploy/systemd' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'What works with what', slug: 'reference/integrations' },

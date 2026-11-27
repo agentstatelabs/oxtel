@@ -57,8 +57,8 @@ What oxtel detects about where it runs, and records with everything it sends.
 | Where | What's detected | Status |
 |---|---|---|
 | Any host | The host's name, architecture and machine id, the OS, and the process, but not its command line, which may hold secrets | Supported |
-| Containers | The container's id, from cgroup v1 or v2 | Supported |
-| Kubernetes | The namespace and pod, and the node from `K8S_NODE_NAME` when the pod spec passes it in | Supported |
+| Containers | The container's id, under Docker with cgroup v1 or v2: [in a container](/deploy/docker/) | Supported |
+| Kubernetes | The namespace and the pod's name, and the node and the pod's UID when the pod spec passes them in: [on Kubernetes](/deploy/kubernetes/) | Supported |
 | Cloud providers | The provider, region and instance | Planned |
 | Remote management | An OpAMP client, for configuration from a central server, such as sampling and log levels, applied without a restart | Planned |
 

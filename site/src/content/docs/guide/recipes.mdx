@@ -29,7 +29,7 @@ With `oxtel-tower` and its `axum` feature, one layer gives every request a span 
 <Example file="examples/web.rs" region="serve" />
 
 - Call `oxtel::init()` first, so the layer finds the metrics recorder.
-- Shut down gracefully, as above. Otherwise Ctrl-C ends the process at once, before oxtel can send what's pending.
+- Shut down gracefully, as above. Otherwise Ctrl-C ends the process at once, before oxtel can send what's pending. Deployed, wait for SIGTERM too, which is how Docker, Kubernetes and systemd stop a program: [in a container](/deploy/docker/#stopping-cleanly) shows how.
 - `.with_access_log(false)` drops the `request` lines; `RUST_LOG=info,oxtel_tower=warn` keeps only those for failed requests.
 
 [A web service](/scenarios/web-service/) has the whole program.

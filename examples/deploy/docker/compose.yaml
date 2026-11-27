@@ -1,0 +1,22 @@
+# The service example in a container, sending to an OpenTelemetry
+# Collector in another. Run `docker compose up --build` in this directory,
+# then `curl localhost:8080/orders/7`.
+services:
+  shop:
+    build:
+      context: ../../..
+      dockerfile: examples/deploy/Dockerfile
+    image: oxtel-service:example
+    ports:
+      - "8080:8080"
+    environment:
+      OTEL_SERVICE_NAME: shop
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://collector:4318
+    # `docker compose stop` sends SIGTERM, then kills the service if it
+    # hasn't stopped after this long.
+    stop_grace_period: 10s
+    depends_on: [collector]
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    volumes:
+      - ../../backends/collector/collector.yaml:/etc/otelcol-contrib/config.yaml:ro

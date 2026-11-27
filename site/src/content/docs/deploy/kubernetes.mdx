@@ -1,0 +1,53 @@
+---
+title: On Kubernetes
+description: A service and an OpenTelemetry Collector on Kubernetes, which pod attributes oxtel finds itself, and which the downward API passes in.
+---
+
+import Example from '../../../components/Example.astro';
+
+On Kubernetes, programs usually send to an [OpenTelemetry Collector](/backends/collector/) in the cluster, which sends on to your backends. oxtel finds out some things about the pod it runs in by itself, and the pod spec passes in the rest. The service here is [the one for containers](/deploy/docker/), with the same image: it stops cleanly on the SIGTERM Kubernetes sends, and answers probes at `/healthz`.
+
+The files are in the repository's `examples/deploy/kubernetes/`.
+
+## The Collector
+
+Two common ways to run it:
+
+- **A gateway:** one Deployment behind a Service, which every pod sends to by name. The simplest, and enough for most clusters.
+- **An agent:** one Collector on each node, as a DaemonSet, which pods on that node send to through the node's address. Telemetry stays on the node until the Collector has batched it, and per-node work, such as reading the node's own metrics, has a place to run.
+
+The gateway, which prints what arrives; add your backend's exporter to its configuration:
+
+<Example file="examples/deploy/kubernetes/collector.yaml" />
+
+The agent instead, using the same configuration:
+
+<Example file="examples/deploy/kubernetes/collector-agent.yaml" />
+
+With the agent, give the service `HOST_IP` from the downward API's `status.hostIP`, and send to `http://$(HOST_IP):4318`.
+
+## The service
+
+<Example file="examples/deploy/kubernetes/service.yaml" />
+
+- **`OTEL_EXPORTER_OTLP_ENDPOINT`** names the Collector's Service. Nothing else about sending needs setting.
+- **Stopping.** Kubernetes sends SIGTERM, and kills the pod 30 seconds later, its default `terminationGracePeriodSeconds`. The service stops at once, after sending what's pending.
+- **Probes** go to `/healthz`, which the service answers outside its HTTP layer, so they aren't traced, logged or counted with real requests.
+
+## The pod's attributes
+
+oxtel records the pod's attributes on everything it sends, so a backend can tell pods, nodes and deployments apart. It finds the first two itself; on a current cluster, with cgroup v2, the pod spec passes in the rest:
+
+| Attribute | From |
+|---|---|
+| `k8s.namespace.name` | The service account's namespace file, which Kubernetes mounts unless `automountServiceAccountToken` is false |
+| `k8s.pod.name` | The pod's hostname |
+| `k8s.node.name` | `K8S_NODE_NAME`, from the downward API's `spec.nodeName`, as above |
+| `k8s.pod.uid` | `OTEL_RESOURCE_ATTRIBUTES`, from the downward API's `metadata.uid`, as above. cgroup v2 hides the pod's cgroup path from it, where oxtel would otherwise read the UID. |
+| `k8s.deployment.name`, and anything else | `OTEL_RESOURCE_ATTRIBUTES` |
+
+The container's id isn't among them: under cgroup v2 a pod can't see it. Without the service account's file, pass the namespace in too, from `metadata.namespace`. The Collector's `k8sattributes` processor can add more, such as the pod's labels, by looking each pod up in the Kubernetes API.
+
+## How it's checked
+
+On every change, CI starts a one-node Kubernetes, k3s, in a container, loads the image into it, and applies the gateway and the service; the cluster must accept the agent too. It sends a request through the service's Service, and the request's span must reach the Collector with every attribute in the table. `check.sh`, in `examples/deploy/`, has the checks; it never touches a cluster other than the one it starts.

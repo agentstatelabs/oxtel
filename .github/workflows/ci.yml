@@ -170,6 +170,22 @@ jobs:
       - name: Each backend gets the telemetry its page says it will
         run: examples/backends/run.sh
 
+  # The deployment guides' files, used as the guides say: the service in a
+  # container, on a one-node Kubernetes, and as a systemd service, each
+  # stopped as its platform stops it. See examples/deploy/check.sh.
+  deploy:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [docker, kubernetes, systemd]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        if: matrix.platform == 'systemd'
+      - name: The service runs and stops as the guide says
+        run: examples/deploy/check.sh ${{ matrix.platform }}
+
   # oxtel-semconv is generated: regenerating it with the pinned Weaver and
   # conventions must change nothing.
   semconv:
