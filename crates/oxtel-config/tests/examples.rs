@@ -2,8 +2,9 @@
 //! gets.
 
 use oxtel_config::{
-    AttributeValue, Config, Error, ExporterConfig, OtlpFileConfig, OtlpGrpcConfig, OtlpHttpConfig,
-    ProcessorConfig, ReaderConfig, SamplerConfig, TlsConfig, parse_with,
+    AggregationConfig, AttributeValue, Config, Error, ExporterConfig, OtlpFileConfig,
+    OtlpGrpcConfig, OtlpHttpConfig, ProcessorConfig, ReaderConfig, SamplerConfig, TlsConfig,
+    parse_with,
 };
 
 fn fixture(name: &str) -> String {
@@ -450,5 +451,18 @@ fn oxtel_s_own_example_reads_without_warnings() {
         otlp(&t.processors[0]).headers,
         vec![("x-tenant".into(), "acme".into())]
     );
-    assert_eq!(parsed.config.meter_provider.unwrap().readers.len(), 2);
+    let meters = parsed.config.meter_provider.unwrap();
+    assert_eq!(meters.readers.len(), 2);
+    match &meters.readers[0] {
+        ReaderConfig::Periodic {
+            exporter: ExporterConfig::OtlpHttp(o),
+            ..
+        } => {
+            assert_eq!(o.temporality_preference.as_deref(), Some("delta"));
+            assert!(o.exponential_histograms);
+        }
+        other => panic!("not a periodic OTLP reader: {other:?}"),
+    }
+    assert_eq!(meters.views.len(), 3);
+    assert_eq!(meters.views[2].aggregation, Some(AggregationConfig::Drop));
 }
