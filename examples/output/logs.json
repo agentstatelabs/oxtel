@@ -1,0 +1,3 @@
+{"timestamp":"2026-11-20T20:26:48.537496Z","level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)"}
+{"timestamp":"2026-11-20T20:26:48.537538Z","level":"INFO","target":"logs","message":"signed in","user.id":42,"plan":"team"}
+{"timestamp":"2026-11-20T20:26:48.537580Z","level":"WARN","target":"logs","message":"payment provider slow; retrying","trace_id":"409c20c1faeb1cb209081fdf8cba692e","span_id":"16048a549a6a6719","http.route":"/orders","order.id":7,"attempt":2}

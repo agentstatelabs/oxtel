@@ -13,13 +13,17 @@ hero:
     - text: Get started
       link: start/
       icon: right-arrow
+    - text: Scenarios
+      link: scenarios/logs/
+      icon: open-book
+      variant: secondary
     - text: View on GitHub
       link: https://github.com/agentstatelabs/oxtel
       icon: external
       variant: minimal
 ---
 
-import { Aside, Card, CardGrid, LinkCard } from '@astrojs/starlight/components';
+import { Aside, Card, CardGrid, LinkCard, Steps, TabItem, Tabs } from '@astrojs/starlight/components';
 import Example from '../../components/Example.astro';
 
 ## One line to start
@@ -28,7 +32,38 @@ import Example from '../../components/Example.astro';
 
 <Example file="examples/logs.rs" />
 
-On a terminal you get readable text. Anywhere else, such as a container whose output goes to a log shipper, you get one JSON object per line, with each field as a key of its own. Lines inside a span carry its fields and its trace id, so you can find everything one request did.
+## What it prints
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/logs.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/logs.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+The first line is oxtel's own. It says, in plain words, where each kind of telemetry goes, and here that nothing leaves the program. After it come the program's lines. Each field is a key of its own, and lines inside a span carry its fields and its trace id, so you can find everything one request did. CI runs the example and checks it still prints these lines.
+
+## Three steps, no rewrites
+
+<Steps>
+
+1. **Logs.** `oxtel::init()`, as above. Text on a terminal, JSON anywhere else, and `RUST_LOG` chooses how much.
+
+2. **Requests.** For a web service, one layer on an axum router gives every request a span, a log line and duration metrics:
+
+   <Example file="examples/web.rs" region="serve" />
+
+3. **Send it somewhere.** Point oxtel at an OpenTelemetry Collector or any backend that takes OTLP. The code doesn't change:
+
+   ```bash
+   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=shop cargo run
+   ```
+
+</Steps>
+
+[Get started](/start/) goes through each step.
 
 ## Why oxtel
 
@@ -36,16 +71,36 @@ On a terminal you get readable text. Anywhere else, such as a container whose ou
 	<Card title="Your code doesn't change" icon="seti:rust">
 		Rust code already records spans, logs and metrics with `tracing` and `metrics`. oxtel turns them into log lines, OTLP for collectors and backends, and Prometheus scrapes. There's no second API to learn, and no bridge between two.
 	</Card>
+	<Card title="One line per framework" icon="puzzle">
+		A layer for axum and tower services, a wrapper for MCP servers and clients, one line for SQLite, PostgreSQL and sqlx. Each records what the OpenTelemetry conventions name, under their names.
+	</Card>
 	<Card title="Nothing is sent until you say so" icon="approve-check">
-		With no settings, you get log lines and nothing else. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and traces, metrics and logs go there, with no rebuild.
+		With no settings, you get log lines and nothing else. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and traces, metrics and logs go there, with no rebuild. A program that only wants logs can leave out every HTTP and TLS crate.
 	</Card>
-	<Card title="It tells you what it did" icon="information">
-		When it starts, one line says where each kind of telemetry goes. If sending fails, it says so, and what to check.
-	</Card>
-	<Card title="Built to the standards" icon="list-format">
-		The OpenTelemetry settings, protocol and naming conventions. CI checks the output against a real OpenTelemetry Collector and Prometheus's own checker.
+	<Card title="Failures are explained" icon="information">
+		When sending fails, oxtel says so at once, with where it was sending, why it failed and what to check. Then it counts quietly, and says when sending works again.
 	</Card>
 </CardGrid>
+
+## Faster than the official stack
+
+Measured against the official OpenTelemetry Rust SDK with `tracing-opentelemetry`, doing the same work on the same machine, in October 2026. Lower is better.
+
+| What | oxtel | Official stack |
+|---|---|---|
+| A span with 3 fields | **258 ns** | 671 ns |
+| A span that isn't sampled | **84 ns** | 589 ns |
+| A counter, with attributes on each call | **13 ns** | 23 ns |
+| A counter, 8 threads on one series | **0.4–0.6 ns** | 20–65 ns |
+| CPU per span, sent over OTLP at 40,000 spans/s | **5.3 µs** | 7.2 µs |
+
+In a burst, oxtel exports 1.9 times as many spans a second, with 2.5 times less CPU per span, and both stay within 1.5 MiB. [The benchmarks](https://github.com/agentstatelabs/oxtel/blob/main/bench/RESULTS.md) say how each was measured and made fair, with every number and how to reproduce them.
+
+## Checked against the real thing
+
+- **An OpenTelemetry Collector** decodes oxtel's traces, metrics and logs on every change, over protobuf and JSON, and CI compares what it got with what was sent. [The conformance tests](https://github.com/agentstatelabs/oxtel/blob/main/conformance/README.md) list what's checked.
+- **Prometheus's own checker**, `promtool`, reads oxtel's `/metrics` page, and the Collector's Prometheus receiver scrapes it.
+- **The names come from the conventions.** OpenTelemetry's Weaver generates them from a pinned conventions release, and CI checks they match.
 
 ## Where to go next
 

@@ -31,6 +31,9 @@ const LANGUAGES: Record<string, string> = {
 	yml: 'yaml',
 	sh: 'bash',
 	json: 'json',
+	// What an example prints, in examples/output/, by OXTEL_LOG_FORMAT.
+	text: 'text',
+	ecs: 'json',
 };
 
 const ANCHOR = /\bANCHOR(_END)?:\s*(\S+)\s*$/;
