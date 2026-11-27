@@ -1,0 +1,9 @@
+# What `docker build .` leaves out of the build context: build output,
+# the site, which the images don't need, and a checkout's own Cargo
+# settings, such as a build directory elsewhere.
+.cargo/config.toml
+target/
+.git/
+site/
+fuzz/target/
+.leakscan.local

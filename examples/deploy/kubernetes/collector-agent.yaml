@@ -1,0 +1,37 @@
+# The same Collector as an agent instead: one on every node, as a
+# DaemonSet, listening on the node's own address. Pods send to the
+# Collector on their node, at http://$(HOST_IP):4318, with HOST_IP set from
+# the downward API's status.hostIP. It uses collector.yaml's ConfigMap.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: otel-agent
+spec:
+  selector:
+    matchLabels:
+      app: otel-agent
+  template:
+    metadata:
+      labels:
+        app: otel-agent
+    spec:
+      containers:
+        - name: collector
+          image: otel/opentelemetry-collector-contrib:0.161.0
+          args: [--config=/etc/otelcol/config.yaml]
+          ports:
+            - containerPort: 4318
+              hostPort: 4318
+            - containerPort: 4317
+              hostPort: 4317
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otelcol
+      volumes:
+        - name: config
+          configMap:
+            name: otel-collector

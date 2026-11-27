@@ -46,6 +46,10 @@ name = "web"
 path = "web.rs"
 
 [[example]]
+name = "service"
+path = "service.rs"
+
+[[example]]
 name = "cli"
 path = "cli.rs"
 

@@ -1,0 +1,53 @@
+---
+title: In a container
+description: A service in a Docker image, writing JSON log lines, stopping cleanly on SIGTERM, and sending to a Collector beside it.
+---
+
+import Example from '../../../components/Example.astro';
+
+Four things matter for a program in a container, and oxtel takes care of two of them by default:
+
+- **Log lines as JSON.** A container's output isn't a terminal, so oxtel writes one JSON object per line, which every log shipper reads. Nothing to do.
+- **Its own identity.** oxtel records the container's id as `container.id`, with the host and the process. Nothing to do.
+- **Stopping cleanly.** Docker stops a container with SIGTERM. The program has to handle it, or what it hasn't sent yet is lost.
+- **Listening on every interface,** so requests from outside the container arrive: `0.0.0.0`, not `127.0.0.1`.
+
+[The service example](https://github.com/agentstatelabs/oxtel/blob/main/examples/service.rs) does all four, and the files here run it.
+
+## The image
+
+The files are in the repository's `examples/deploy/`. Build the image from the repository's root.
+
+<Example file="examples/deploy/Dockerfile" />
+
+- **No CA bundle.** oxtel verifies HTTPS receivers with root certificates built into it, so a slim image needs nothing added to send to a hosted backend.
+- **The exec form of `ENTRYPOINT`,** as here, makes the service process 1 in the container, so the SIGTERM reaches it. The shell form would make a shell process 1 instead, and a shell may not pass the signal on.
+
+## Stopping cleanly
+
+`docker stop` sends SIGTERM, waits 10 seconds, then kills the process. A program that doesn't handle SIGTERM never gets to send what's pending: one that isn't process 1 ends at once, and process 1, for which a signal it doesn't handle is ignored, is killed when the 10 seconds are up. tokio's `ctrl_c` handles only Ctrl-C, which is SIGINT, so a service needs to wait for both:
+
+<Example file="examples/service.rs" region="stop" />
+
+The server then finishes the requests in flight, `main` returns, and the guard sends what's left, waiting up to 5 seconds for the receiver. Keep the stop timeout above that: Docker's default of 10 seconds is enough.
+
+<Example file="examples/service.rs" region="serve" />
+
+## Log lines
+
+Lines go to standard error, and `docker logs` shows both streams. Two settings change that:
+
+- **A platform that collects only standard output:** `OXTEL_LOG_OUTPUT=stdout`.
+- **`docker run -t`** gives the container a terminal, and oxtel writes text instead. `OXTEL_LOG_FORMAT=json` keeps JSON either way.
+
+## With a Collector
+
+The service and an [OpenTelemetry Collector](/backends/collector/) beside it, as Docker Compose services. The service sends to the Collector by its service name. Run `docker compose up --build` in `examples/deploy/docker/`, then `curl localhost:8080/orders/7`:
+
+<Example file="examples/deploy/docker/compose.yaml" />
+
+`docker compose logs collector` shows the request's span, with the container's id among its resource attributes. Point `OTEL_EXPORTER_OTLP_ENDPOINT` at any other [backend](/backends/) the same way.
+
+## How it's checked
+
+On every change, CI builds the image and runs this compose file. It sends a request, then stops the service as Docker does. The service must exit cleanly with status 0 well before Docker would kill it, its last log line must say it stopped, and the request's span, sent as it stopped, must reach the Collector with the container's id. `check.sh`, in `examples/deploy/`, has the checks.

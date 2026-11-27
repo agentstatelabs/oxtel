@@ -1,0 +1,35 @@
+# The service example as a systemd service. Install the binary as
+# /usr/local/bin/service, this file in /etc/systemd/system/, and
+# telemetry.env as /etc/shop/telemetry.env, then:
+#
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now shop
+#   journalctl -u shop -f
+
+[Unit]
+Description=Shop, the oxtel service example
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/usr/local/bin/service
+Environment=PORT=8080
+Environment=OTEL_SERVICE_NAME=shop
+# Where telemetry goes, and the key it needs, in a file only root reads.
+EnvironmentFile=/etc/shop/telemetry.env
+# Log lines go to the journal: as JSON, since it isn't a terminal. For
+# lines that read well in journalctl, use text instead.
+#Environment=OXTEL_LOG_FORMAT=text
+# systemd stops the service with SIGTERM, and kills it if it hasn't
+# stopped after this long.
+TimeoutStopSec=15
+Restart=on-failure
+# Run as a user of its own, with no write access to the system.
+DynamicUser=yes
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
