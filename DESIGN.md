@@ -78,7 +78,7 @@ Many crates already report what they do through `tracing`, under names of their 
 - **Filtering.** A library's events are often at `debug`. Each mapping names the targets it reads, and the facade lets those through to the trace layer alone: local logs and exported logs keep the program's own level, and the bridge from the `log` crate takes its level from the program's filters, not from the mappings'. The cost: `tracing`'s global level hint rises to the mappings' level (`debug` for sqlx). Each call site still checks its own interest, once and cached, so that's cheap; a library that asks only whether a level is enabled (`level_enabled!`) may do work at that level that nothing reads.
 - **Ready-made instrumentation wins.** A mapping leaves alone an event inside a span the ready-made instrumentation for the same library made (for sqlx, oxtel-sql's wrapper), so an operation is never counted twice.
 - **Fail-safe.** Library output isn't a stable interface. An event that doesn't have the shape a mapping knows is left alone: logged as usual, with no span or metric made from it, rather than recorded wrong. Each mapping is tested against every version of its library it supports (sqlx 0.8 and 0.9), and against the library itself, not only events shaped like its own.
-- **What a mapping can't do** is record what the event doesn't carry. sqlx's query event has no error and doesn't say which database it's about, so its spans can't be marked as failed, and `db.system.name` is `other_sql` unless configured. The [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/) sets the mapping against oxtel-sql's wrapper, which records everything but needs queries to run through it.
+- **What a mapping can't do** is record what the event doesn't carry. sqlx's query event has no error and doesn't say which database it's about, so its spans can't be marked as failed, and `db.system.name` is `other_sql` unless configured. The [databases guide](https://oxtel.agentstatelabs.com/guide/databases/) sets the mapping against oxtel-sql's wrapper, which records everything but needs queries to run through it.
 
 ## 4. Architecture
 
@@ -164,7 +164,7 @@ Many crates already report what they do through `tracing`, under names of their 
 
 - New instrumentation APIs. `tracing` and `metrics` are the APIs.
 - A collector. Use the OpenTelemetry Collector or a vendor build of it.
-- eBPF instrumentation. OpenTelemetry's OBI provides it, and it complements oxtel: it sees programs from outside, oxtel from inside. See the [guide](https://agentstatelabs.github.io/oxtel/guide/ebpf/).
+- eBPF instrumentation. OpenTelemetry's OBI provides it, and it complements oxtel: it sees programs from outside, oxtel from inside. See the [guide](https://oxtel.agentstatelabs.com/guide/ebpf/).
 - Profiling, until OpenTelemetry's profiles signal is stable.
 - Browser or WASM telemetry, at first.
 

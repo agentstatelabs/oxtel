@@ -2,10 +2,10 @@
 import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
-// GitHub Pages for now. With a custom domain, `site` becomes the domain and
-// `base` becomes '/'.
-const site = 'https://agentstatelabs.github.io';
-const base = '/oxtel';
+// GitHub Pages, on the project's own domain, from its root. The old address,
+// agentstatelabs.github.io/oxtel/, redirects here.
+const site = 'https://oxtel.agentstatelabs.com';
+const base = '/';
 
 /**
  * Pages link to each other from the site's root ("/start/"), and this adds
