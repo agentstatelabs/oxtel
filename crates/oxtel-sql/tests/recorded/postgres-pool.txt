@@ -1,0 +1,13 @@
+metric gauge db.client.connection.count
+  db.client.connection.pool.name
+  db.client.connection.state
+metric gauge db.client.connection.max
+  db.client.connection.pool.name
+metric gauge db.client.connection.pending_requests
+  db.client.connection.pool.name
+metric counter db.client.connection.timeouts
+  db.client.connection.pool.name
+metric histogram db.client.connection.use_time s
+  db.client.connection.pool.name
+metric histogram db.client.connection.wait_time s
+  db.client.connection.pool.name

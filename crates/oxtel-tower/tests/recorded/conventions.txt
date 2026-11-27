@@ -1,0 +1,46 @@
+span [oxtel_tower] client GET
+  error.type
+  http.request.method
+  http.response.status_code
+  network.protocol.version
+  server.address
+  server.port
+  url.full
+span [oxtel_tower] server GET /fail
+  error.type
+  http.request.method
+  http.response.status_code
+  http.route
+  network.protocol.version
+  server.address
+  server.port
+  url.path
+  url.scheme
+  user_agent.original
+span [oxtel_tower] server GET /items/{id}
+  http.request.method
+  http.response.status_code
+  http.route
+  network.protocol.version
+  server.address
+  server.port
+  url.path
+  url.scheme
+  user_agent.original
+metric histogram http.client.request.duration s
+  error.type
+  http.request.method
+  http.response.status_code
+  server.address
+  server.port
+  url.scheme
+metric gauge http.server.active_requests
+  http.request.method
+  url.scheme
+metric histogram http.server.request.duration s
+  error.type
+  http.request.method
+  http.response.status_code
+  http.route
+  network.protocol.version
+  url.scheme

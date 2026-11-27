@@ -480,6 +480,18 @@ async fn the_pool_records_its_connections() {
         "the caller that timed out isn't waiting any more"
     );
 
+    // The names recorded, kept in tests/recorded/ for the site's reference:
+    // OXTEL_REWRITE_RECORDED=1 rewrites the file when a change is meant.
+    oxtel_sdk::testing::assert_recorded_names(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/recorded/postgres-pool.txt"
+        ),
+        &h.spans.finished_spans(),
+        &h.meters.collect(),
+        std::env::var_os("OXTEL_REWRITE_RECORDED").is_some(),
+    );
+
     // Every name and label is one the conventions define; the durations
     // are in seconds. (oxtel records up-down counters as gauges.)
     for family in h.meters.collect() {
@@ -539,6 +551,14 @@ async fn spans_and_metrics_use_only_defined_names() {
             );
         }
     }
+    // The names recorded, kept in tests/recorded/ for the site's reference:
+    // OXTEL_REWRITE_RECORDED=1 rewrites the file when a change is meant.
+    oxtel_sdk::testing::assert_recorded_names(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/tests/recorded/postgres.txt"),
+        &spans,
+        &h.meters.collect(),
+        std::env::var_os("OXTEL_REWRITE_RECORDED").is_some(),
+    );
     let family = durations(&h.meters);
     let definition = metric::by_name(&family.name).expect("a defined metric");
     assert_eq!(definition.instrument, Instrument::Histogram);

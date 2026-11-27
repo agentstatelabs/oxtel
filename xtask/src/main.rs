@@ -11,6 +11,10 @@
 //! - `cargo run -p xtask -- gen-settings` writes the site's settings page
 //!   from the table in `settings.rs`, and `check-settings` checks that
 //!   table against the code and the page against the table.
+//! - `cargo run -p xtask -- gen-telemetry` writes the site's page of every
+//!   span attribute and metric from the names the crates' tests recorded
+//!   (`crates/*/tests/recorded/`) and oxtel-semconv, and `check-telemetry`
+//!   checks it's up to date.
 //! - `cargo run -p xtask -- check-output` runs the examples that have a
 //!   file in `examples/output/` and checks they still print what it shows,
 //!   since the site shows those files as their output. `--bless` rewrites
@@ -21,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode};
 
 mod settings;
+mod telemetry;
 
 /// The Weaver release the templates are written for.
 const WEAVER_VERSION: &str = "0.26.1";
@@ -88,6 +93,28 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("gen-telemetry") => {
+            let root = workspace_root();
+            match telemetry::page(&root).and_then(|page| {
+                std::fs::write(root.join(telemetry::PAGE), page).map_err(Into::into)
+            }) {
+                Ok(()) => {
+                    println!("wrote {}", telemetry::PAGE);
+                    ExitCode::SUCCESS
+                }
+                Err(e) => {
+                    eprintln!("gen-telemetry failed: {e}");
+                    ExitCode::FAILURE
+                }
+            }
+        }
+        Some("check-telemetry") => match telemetry::check(&workspace_root()) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("check-telemetry failed: {e}");
+                ExitCode::FAILURE
+            }
+        },
         Some("check-settings") => match settings::check(&workspace_root()) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -97,7 +124,7 @@ fn main() -> ExitCode {
         },
         _ => {
             eprintln!(
-                "usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples | check-output [--bless] | gen-settings | check-settings"
+                "usage: cargo run -p xtask -- gen-proto | gen-semconv | check-examples | check-output [--bless] | gen-settings | check-settings | gen-telemetry | check-telemetry"
             );
             ExitCode::from(2)
         }

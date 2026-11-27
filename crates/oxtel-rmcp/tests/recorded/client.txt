@@ -1,0 +1,75 @@
+span [oxtel_rmcp] client tools/call broken
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.name
+  mcp.method.name
+  mcp.protocol.version
+span [oxtel_rmcp] client tools/call crash
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.name
+  mcp.method.name
+  mcp.protocol.version
+  rpc.response.status_code
+span [oxtel_rmcp] client tools/call echo
+  gen_ai.operation.name
+  gen_ai.tool.name
+  mcp.method.name
+  mcp.protocol.version
+span [oxtel_rmcp] server initialize
+  jsonrpc.request.id
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+span [oxtel_rmcp] server notifications/initialized
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+span [oxtel_rmcp] server tools/call broken
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.call.arguments
+  gen_ai.tool.call.result
+  gen_ai.tool.name
+  jsonrpc.request.id
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+span [oxtel_rmcp] server tools/call crash
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.call.arguments
+  gen_ai.tool.name
+  jsonrpc.request.id
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+  rpc.response.status_code
+span [oxtel_rmcp] server tools/call echo
+  gen_ai.operation.name
+  gen_ai.tool.call.arguments
+  gen_ai.tool.call.result
+  gen_ai.tool.name
+  jsonrpc.request.id
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+span [rmcp] internal serve_inner
+metric histogram mcp.client.operation.duration s
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.name
+  mcp.method.name
+  mcp.protocol.version
+  rpc.response.status_code
+metric histogram mcp.server.operation.duration s
+  error.type
+  gen_ai.operation.name
+  gen_ai.tool.name
+  mcp.method.name
+  mcp.protocol.version
+  network.transport
+  rpc.response.status_code
+metric histogram mcp.server.session.duration s
+  mcp.protocol.version
+  network.transport

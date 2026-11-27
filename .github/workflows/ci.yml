@@ -83,6 +83,8 @@ jobs:
         run: cargo run -q -p xtask -- check-output
       - name: The settings page describes every setting the code reads
         run: cargo run -q -p xtask -- check-settings
+      - name: The telemetry page lists what the crates' tests recorded
+        run: cargo run -q -p xtask -- check-telemetry
 
   msrv:
     runs-on: ubuntu-latest

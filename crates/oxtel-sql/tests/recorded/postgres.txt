@@ -1,0 +1,24 @@
+span [oxtel_sql] client CREATE TABLE t
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client INSERT t
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.status_code
+  db.system.name
+  error.type
+  server.address
+  server.port
+metric histogram db.client.operation.duration s
+  db.namespace
+  db.query.summary
+  db.response.status_code
+  db.system.name
+  error.type
+  server.address
+  server.port

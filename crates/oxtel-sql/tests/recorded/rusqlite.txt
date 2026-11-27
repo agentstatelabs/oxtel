@@ -1,0 +1,15 @@
+span [oxtel_sql] client CREATE TABLE t
+  db.query.summary
+  db.query.text
+  db.system.name
+span [oxtel_sql] client INSERT t
+  db.query.summary
+  db.query.text
+  db.system.name
+span [oxtel_sql] client SELECT t
+  db.query.summary
+  db.query.text
+  db.system.name
+metric histogram db.client.operation.duration s
+  db.query.summary
+  db.system.name
