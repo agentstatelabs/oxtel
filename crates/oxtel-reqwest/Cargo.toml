@@ -13,7 +13,7 @@ homepage.workspace = true
 authors.workspace = true
 
 [dependencies]
-oxtel-tower = { path = "../oxtel-tower", version = "0.3.1" }
+oxtel-tower = { path = "../oxtel-tower", version = "0.4.0" }
 async-trait = "0.1.51"
 http = "1.4"
 # Only reqwest's types: the program's own reqwest chooses TLS and the rest.

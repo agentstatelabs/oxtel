@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = { version = "0.3", default-features = false }
+//! oxtel = { version = "0.4", default-features = false }
 //! metrics = "0.24"
 //! ```
 

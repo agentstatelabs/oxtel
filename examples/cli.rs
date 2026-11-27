@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = "0.3"
+//! oxtel = "0.4"
 //! tracing = "0.1"
 //! ```
 
