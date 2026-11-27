@@ -15,7 +15,7 @@ Start with what oxtel logs from the target `oxtel`. When it starts, one line say
 ## Nothing arrives at the collector or backend
 
 - **No endpoint is set.** The startup line says `not exported`. Set `OTEL_EXPORTER_OTLP_ENDPOINT`.
-- **Wrong port.** oxtel speaks OTLP over HTTP, usually on port 4318. Port 4317 is OTLP over gRPC, which oxtel doesn't speak yet; it warns at startup if you point it there.
+- **Wrong port.** oxtel speaks OTLP over HTTP by default, usually on port 4318. Port 4317 is OTLP over gRPC: to use it, build with oxtel's `grpc` feature and set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or use port 4318. oxtel warns at startup if OTLP over HTTP points at 4317.
 - **The receiver refuses it.** A warning such as `refused with status 401` means the credentials are wrong or missing: check `OTEL_EXPORTER_OTLP_HEADERS`. Status 404 means nothing receives data at that path.
 - **Wrong path.** With the general endpoint, oxtel adds `/v1/traces`, `/v1/metrics` and `/v1/logs` itself. A signal's own endpoint, such as `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, is used exactly as given, so it needs the full path. The startup line shows the URLs in full.
 - **Ctrl-C, or the program exits too soon.** Data is sent in batches, every few seconds. Keep the guard until the end of `main`: dropping it sends what's left, waiting up to 5 seconds. A server stopped with Ctrl-C never reaches the end of `main` unless it shuts down gracefully, as in the [web service recipe](/guide/recipes/#a-web-service).

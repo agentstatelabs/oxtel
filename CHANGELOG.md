@@ -6,36 +6,13 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-26
+
+Metrics for every backend, and three new crates. OTLP can now carry deltas instead of totals and base-2 exponential histograms, as some backends prefer, and views change a metric's name, buckets or attributes without touching the code that records it. OTLP can also go over gRPC, with the new `grpc` feature, use TLS certificate files, or be written as OTLP/JSON lines to standard output or a file. The new crates instrument reqwest clients (`oxtel-reqwest`), calls to generative AI models (`oxtel-genai`) and the tokio runtime (`oxtel-tokio`).
+
+Coming from 0.3, metrics stay cumulative, with explicit buckets, unless an exporter asks otherwise. Three changes can break a build: oxtel-rmcp needs rmcp 3; a `match` on `oxtel_sdk::metrics::PointValue` needs an arm for `ExponentialHistogram`, and one on `oxtel_otlp::Protocol` an arm for `Grpc`; and code that builds a `MetricFamily` itself needs its new `temporality` field.
+
 ### Added
-- **`oxtel-reqwest`, a new crate: HTTP client spans and metrics for reqwest 0.13.** `oxtel_reqwest::client(reqwest::Client::new())` wraps a client in reqwest-middleware's `ClientWithMiddleware`, whose methods are reqwest's own, so call sites don't change. Every request gets a client span named for its method, W3C trace context in its headers, and `http.client.request.duration`, as oxtel-tower's client layer records them. A request that gets no response is an error, with `error.type` saying why: `timeout`, `connect`, `redirect`, `body`, `decode` or `request`. The query string and URL credentials are never recorded. With other middleware, add `oxtel_reqwest::HttpClientMiddleware` among them.
-- **`oxtel_tower::ClientCall`**, for instrumenting an HTTP client that isn't a tower service: it records a request as `HttpClientLayer` does.
-- **`oxtel-genai`, a new crate: spans and metrics for calls to generative AI models**, as the GenAI semantic conventions describe them, for any model client. Say what a call is when it starts, `oxtel_genai::chat("ollama", "llama3.2").server("localhost", 11434).start()`, make the call inside its span, and end it with what came back: `.response_model(..).input_tokens(..).output_tokens(..).finish()`, or `.fail("timeout")`.
-  - A client span named `{operation} {model}`, with the provider, the model, the server, the request's settings (`max_tokens`, `temperature`, `top_p`, `top_k`, penalties, `seed`, choices, streaming), the response's id and model, and the tokens used.
-  - `gen_ai.client.inference.duration`; token usage as `gen_ai.client.inference.usage.input_tokens` and `.output_tokens` counters by `gen_ai.token.modality`, and as `gen_ai.client.inference.operation.input_tokens` and `.output_tokens` histograms per call; for streamed responses, `Call::chunk` records `gen_ai.client.inference.time_to_first_chunk` and `.time_per_output_chunk`.
-  - Embeddings calls record `gen_ai.client.operation.duration`, since they aren't inference.
-  - Token metrics are recorded only when the call reports its tokens, as the conventions require. No prompt or completion content is recorded.
-- **The GenAI conventions' histogram buckets.** `gen_ai.client.inference.duration` and the other GenAI durations get bounds from 0.01 s to 81.92 s, and the per-call token histograms powers of four from 1 to 67,108,864, as the conventions advise. They're exported from `oxtel_sdk::metrics` as `GENAI_SECONDS_BUCKETS` and `GENAI_TOKEN_BUCKETS`.
-- **`oxtel-tokio`, a new crate: tokio runtime metrics.** `let _runtime = oxtel_tokio::record(&Handle::current());` records every ten seconds, until the value it returns is dropped:
-  - `oxtel.tokio.worker.count`, the worker threads;
-  - `oxtel.tokio.task.count`, the tasks spawned and not yet finished;
-  - `oxtel.tokio.global_queue.length`, the tasks waiting in the global queue;
-  - `oxtel.tokio.utilization`, the share of the workers' time spent running tasks since the last recording, from 0 to 1.
-  - Built with `--cfg tokio_unstable`, it also records the blocking pool: `oxtel.tokio.blocking.thread.count` by state (`busy` or `idle`) and `oxtel.tokio.blocking.queue.length`.
-  - The OpenTelemetry conventions define no tokio metrics, so these are named under `oxtel.`.
-  - It records on a thread of its own, so it keeps going when the runtime is too busy to run anything else. `oxtel_tokio::Sampler` records on demand instead, and `with_name` labels each runtime of a program that has several.
-  - It needs tokio 1.45 or later.
-- **OTLP/JSON lines to standard output or a file**, the specification's OTLP file exporter. Each export becomes one line of OTLP/JSON, the encoding OTLP/HTTP uses, so the Collector's `otlpjsonfile` receiver reads it back without loss; CI checks that it does, for every signal.
-  - In a configuration file: `otlp_file/development`, with `output_stream: stdout` (the default) or `file:///path/to/traces.jsonl`. Exporters naming the same stream share it, so lines never interleave. A file that can't be opened is a warning, and that exporter is left out.
-  - In code: `oxtel_otlp::OtlpFileExporter::stdout()` or `::file(path)`, for any pipeline. It needs no HTTP client, so it works without oxtel-otlp's `http-proto` feature.
-  - The startup line names it: `traces: /var/log/traces.jsonl (OTLP/JSON lines)`.
-- **OTLP over gRPC**, with the new `grpc` feature of oxtel and oxtel-otlp. `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, for every signal or one, sends to the collector services' `Export` methods at the endpoint, used as is and `http://localhost:4317` by default, with gzip, headers as metadata, partial-success counts, and the specification's retries (`UNAVAILABLE` and the other retryable codes). In a configuration file, it's the `otlp_grpc` exporter.
-  - It's tonic's HTTP/2 client, run on a small tokio runtime the exporter owns, so it works from any program, async or not, and from inside a runtime.
-  - Failures read as OTLP/HTTP's do: `UNAUTHENTICATED` is reported as status 401, with the hint to check the credentials.
-  - Without the feature, `grpc` falls back to `http/protobuf` with a warning, as before.
-  - CI's Collector conformance tests now run every signal over gRPC too.
-- **TLS certificate files, for every protocol.** `OTEL_EXPORTER_OTLP_CERTIFICATE` names the certificates that verify the receiver, in place of the bundled roots, and `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `_CLIENT_KEY` a client certificate and key for mutual TLS. Each also has a per-signal variable, such as `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`. A configuration file's `tls` (`ca_file`, `cert_file` and `key_file`) works too, where it was warned about before.
-  - A file that can't be read, or a certificate without its key, is a warning at startup naming the file. That signal isn't sent, and if it's tried anyway, each export fails saying why.
-  - In code: `OtlpHttpExporterBuilder::with_certificate`, `with_client_certificate` and `with_tls`.
 - **Delta temporality**, for backends that prefer it. `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` (or `lowmemory`, which is the same for oxtel's synchronous instruments) makes an OTLP exporter's counters and histograms report the change since its previous export, as the specification defines it.
   - Series with no new measurements are left out.
   - A histogram's min and max are the interval's.
@@ -53,14 +30,43 @@ All notable changes to oxtel are recorded here. The format follows
   - It can keep only some attributes, or all but some, and set its own series limit.
   - Observable instrument types select nothing, since the `metrics` facade has none, and a `sum` or `last_value` aggregation leaves an instrument as it is. Both are warnings.
 - `MetricExporter` has two new methods, `temporality` and `histogram_aggregation`, with cumulative and explicit defaults, which the periodic reader asks. `InMemoryMetricExporter`, `OtlpHttpExporterBuilder` and `OtlpFileExporter` can set both.
+- **OTLP over gRPC**, with the new `grpc` feature of oxtel and oxtel-otlp. `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, for every signal or one, sends to the collector services' `Export` methods at the endpoint, used as is and `http://localhost:4317` by default, with gzip, headers as metadata, partial-success counts, and the specification's retries (`UNAVAILABLE` and the other retryable codes). In a configuration file, it's the `otlp_grpc` exporter.
+  - It's tonic's HTTP/2 client, run on a small tokio runtime the exporter owns, so it works from any program, async or not, and from inside a runtime.
+  - Failures read as OTLP/HTTP's do: `UNAUTHENTICATED` is reported as status 401, with the hint to check the credentials.
+  - Without the feature, `grpc` falls back to `http/protobuf` with a warning, as before.
+  - CI's Collector conformance tests now run every signal over gRPC too.
+- **TLS certificate files, for every protocol.** `OTEL_EXPORTER_OTLP_CERTIFICATE` names the certificates that verify the receiver, in place of the bundled roots, and `OTEL_EXPORTER_OTLP_CLIENT_CERTIFICATE` and `_CLIENT_KEY` a client certificate and key for mutual TLS. Each also has a per-signal variable, such as `OTEL_EXPORTER_OTLP_TRACES_CERTIFICATE`. A configuration file's `tls` (`ca_file`, `cert_file` and `key_file`) works too, where it was warned about before.
+  - A file that can't be read, or a certificate without its key, is a warning at startup naming the file. That signal isn't sent, and if it's tried anyway, each export fails saying why.
+  - In code: `OtlpHttpExporterBuilder::with_certificate`, `with_client_certificate` and `with_tls`.
+- **OTLP/JSON lines to standard output or a file**, the specification's OTLP file exporter. Each export becomes one line of OTLP/JSON, the encoding OTLP/HTTP uses, so the Collector's `otlpjsonfile` receiver reads it back without loss; CI checks that it does, for every signal.
+  - In a configuration file: `otlp_file/development`, with `output_stream: stdout` (the default) or `file:///path/to/traces.jsonl`. Exporters naming the same stream share it, so lines never interleave. A file that can't be opened is a warning, and that exporter is left out.
+  - In code: `oxtel_otlp::OtlpFileExporter::stdout()` or `::file(path)`, for any pipeline. It needs no HTTP client, so it works without oxtel-otlp's `http-proto` feature.
+  - The startup line names it: `traces: /var/log/traces.jsonl (OTLP/JSON lines)`.
+- **`oxtel-reqwest`, a new crate: HTTP client spans and metrics for reqwest 0.13.** `oxtel_reqwest::client(reqwest::Client::new())` wraps a client in reqwest-middleware's `ClientWithMiddleware`, whose methods are reqwest's own, so call sites don't change. Every request gets a client span named for its method, W3C trace context in its headers, and `http.client.request.duration`, as oxtel-tower's client layer records them. A request that gets no response is an error, with `error.type` saying why: `timeout`, `connect`, `redirect`, `body`, `decode` or `request`. The query string and URL credentials are never recorded. With other middleware, add `oxtel_reqwest::HttpClientMiddleware` among them.
+- **`oxtel_tower::ClientCall`**, for instrumenting an HTTP client that isn't a tower service: it records a request as `HttpClientLayer` does.
+- **`oxtel-genai`, a new crate: spans and metrics for calls to generative AI models**, as the GenAI semantic conventions describe them, for any model client. Say what a call is when it starts, `oxtel_genai::chat("ollama", "llama3.2").server("localhost", 11434).start()`, make the call inside its span, and end it with what came back: `.response_model(..).input_tokens(..).output_tokens(..).finish()`, or `.fail("timeout")`.
+  - A client span named `{operation} {model}`, with the provider, the model, the server, the request's settings (`max_tokens`, `temperature`, `top_p`, `top_k`, penalties, `seed`, choices, streaming), the response's id and model, and the tokens used.
+  - `gen_ai.client.inference.duration`; token usage as `gen_ai.client.inference.usage.input_tokens` and `.output_tokens` counters by `gen_ai.token.modality`, and as `gen_ai.client.inference.operation.input_tokens` and `.output_tokens` histograms per call; for streamed responses, `Call::chunk` records `gen_ai.client.inference.time_to_first_chunk` and `.time_per_output_chunk`.
+  - Embeddings calls record `gen_ai.client.operation.duration`, since they aren't inference.
+  - Token metrics are recorded only when the call reports its tokens, as the conventions require. No prompt or completion content is recorded.
+- **The GenAI conventions' histogram buckets.** `gen_ai.client.inference.duration` and the other GenAI durations get bounds from 0.01 s to 81.92 s, and the per-call token histograms powers of four from 1 to 67,108,864, as the conventions advise. They're exported from `oxtel_sdk::metrics` as `GENAI_SECONDS_BUCKETS` and `GENAI_TOKEN_BUCKETS`.
+- **`oxtel-tokio`, a new crate: tokio runtime metrics.** `let _runtime = oxtel_tokio::record(&Handle::current());` records every ten seconds, until the value it returns is dropped:
+  - `oxtel.tokio.worker.count`, the worker threads;
+  - `oxtel.tokio.task.count`, the tasks spawned and not yet finished;
+  - `oxtel.tokio.global_queue.length`, the tasks waiting in the global queue;
+  - `oxtel.tokio.utilization`, the share of the workers' time spent running tasks since the last recording, from 0 to 1.
+  - Built with `--cfg tokio_unstable`, it also records the blocking pool: `oxtel.tokio.blocking.thread.count` by state (`busy` or `idle`) and `oxtel.tokio.blocking.queue.length`.
+  - The OpenTelemetry conventions define no tokio metrics, so these are named under `oxtel.`.
+  - It records on a thread of its own, so it keeps going when the runtime is too busy to run anything else. `oxtel_tokio::Sampler` records on demand instead, and `with_name` labels each runtime of a program that has several.
+  - It needs tokio 1.45 or later.
 
 ### Changed
-- **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
-- **`OtlpHttpExporterBuilder::with_endpoint` and `with_url` resolve the URL when the exporter is built**, so they work whichever protocol is chosen, before or after them. `Protocol` has a third variant, `Grpc`, so a `match` on it needs an arm for it.
-- **The port 4317 warning says what to do:** set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or use port 4318. It's given only for OTLP over HTTP.
-- **`PointValue` has a new variant**, `ExponentialHistogram`, and `MetricFamily` a `temporality` field. Code matching on `PointValue` needs an arm for it.
 - **`oxtel-rmcp` now requires rmcp 3.** It moves from rmcp 1.6+ to 3.5+, because it wraps rmcp's own server and client types and so must use the same major version as your program. Upgrade rmcp to 3 together with oxtel-rmcp; programs still on rmcp 1 should stay on oxtel-rmcp 0.3 until then. A client notification that rmcp adds after 3.5 is recorded with `mcp.method.name` set to `_OTHER` until oxtel knows its name.
+- **`PointValue` has a new variant**, `ExponentialHistogram`, and `MetricFamily` a `temporality` field. Code matching on `PointValue` needs an arm for it.
+- **`OtlpHttpExporterBuilder::with_endpoint` and `with_url` resolve the URL when the exporter is built**, so they work whichever protocol is chosen, before or after them. `Protocol` has a third variant, `Grpc`, so a `match` on it needs an arm for it.
 - **The startup line names pull metrics plainly.** With `with_pull_metrics`, it now says metrics are `kept for the program to serve, e.g. at /metrics`, instead of `the program's own setup`, which it keeps for the program's own hooks.
+- **The port 4317 warning says what to do:** set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`, or use port 4318. It's given only for OTLP over HTTP.
+- **oxtel-tower's client spans record the response's HTTP version** in `network.protocol.version`, rather than the version the request asked for, which can differ once HTTP/2 is negotiated.
 
 ## [0.3.1] - 2026-10-13
 
@@ -276,7 +282,8 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/agentstatelabs/oxtel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/agentstatelabs/oxtel/compare/v0.1.0...v0.2.0

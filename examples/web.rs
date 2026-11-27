@@ -11,8 +11,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = "0.3"
-//! oxtel-tower = { version = "0.3", features = ["axum"] }
+//! oxtel = "0.4"
+//! oxtel-tower = { version = "0.4", features = ["axum"] }
 //! axum = "0.8"
 //! tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
 //! tracing = "0.1"

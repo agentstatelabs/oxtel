@@ -12,8 +12,8 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = "0.3"
-//! oxtel-sql = { version = "0.3", features = ["rusqlite"] }
+//! oxtel = "0.4"
+//! oxtel-sql = { version = "0.4", features = ["rusqlite"] }
 //! rusqlite = { version = "0.39", features = ["bundled"] }
 //! tracing = "0.1"
 //! ```

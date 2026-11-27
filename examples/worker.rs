@@ -13,7 +13,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! oxtel = "0.3"
+//! oxtel = "0.4"
 //! metrics = "0.24"
 //! tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
 //! tracing = "0.1"
