@@ -2016,6 +2016,7 @@ dependencies = [
  "rusqlite",
  "schemars",
  "serde",
+ "serde_json",
  "shipping",
  "tokio",
  "tracing",

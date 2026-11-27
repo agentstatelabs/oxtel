@@ -60,6 +60,7 @@ export default defineConfig({
 						{ label: 'A command-line tool', slug: 'scenarios/cli' },
 						{ label: 'A background worker', slug: 'scenarios/worker' },
 						{ label: 'An MCP server over stdio', slug: 'scenarios/mcp-stdio' },
+						{ label: 'An MCP server over HTTP', slug: 'scenarios/mcp-http' },
 						{ label: 'Database access', slug: 'scenarios/database' },
 						{ label: 'Two services', slug: 'scenarios/two-services' },
 						{ label: 'Prometheus scraping only', slug: 'scenarios/prometheus' },

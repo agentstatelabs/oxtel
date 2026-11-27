@@ -52,6 +52,7 @@ Each scenario is a complete program for one kind of project, with its dependenci
 	<LinkCard title="A command-line tool" description="Results on standard output, log lines on standard error, and nothing lost on exit." href="/scenarios/cli/" />
 	<LinkCard title="A background worker" description="A span for each job, carried onto the task that runs it, and each job counted and timed." href="/scenarios/worker/" />
 	<LinkCard title="An MCP server over stdio" description="A span for every request, continuing the client's trace, and nothing written over the protocol." href="/scenarios/mcp-stdio/" />
+	<LinkCard title="An MCP server over HTTP" description="A server on streamable HTTP and a client calling it, with one trace from the client's work into the tool." href="/scenarios/mcp-http/" />
 	<LinkCard title="Database access" description="Every SQLite statement as a span named for what it does, without the values." href="/scenarios/database/" />
 	<LinkCard title="Two services" description="One service calling another over HTTP, and one trace across both." href="/scenarios/two-services/" />
 	<LinkCard title="Prometheus scraping only" description="Metrics at /metrics for Prometheus, with no collector and no HTTP or TLS crates." href="/scenarios/prometheus/" />

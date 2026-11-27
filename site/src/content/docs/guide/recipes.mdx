@@ -56,9 +56,10 @@ Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapp
 <Example file="examples/mcp-stdio.rs" region="serve" />
 
 - Log lines go to standard error by default, which keeps them out of a stdio server's protocol stream. Don't set `OXTEL_LOG_OUTPUT=stdout` for one, or turn on a console exporter.
-- `RUST_LOG=info,rmcp=warn` keeps rmcp's own lines, and its span around the whole session, out of the way.
+- `RUST_LOG=info,rmcp=warn` keeps rmcp's own lines and spans out of the way.
+- Over streamable HTTP, rmcp takes a handler rather than a service: wrap the server in `oxtel_rmcp::InstrumentedHandler` instead.
 
-[An MCP server over stdio](/scenarios/mcp-stdio/) has the whole program.
+[An MCP server over stdio](/scenarios/mcp-stdio/) and [an MCP server over HTTP](/scenarios/mcp-http/) have whole programs.
 
 ## Calling another service
 

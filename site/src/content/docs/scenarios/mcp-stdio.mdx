@@ -51,6 +51,7 @@ The server's answers go to standard output, for the client. Its log lines go to 
 - In JSON, the line also carries the request's fields: the method, the tool, the protocol version and `network.transport`.
 - The other requests wrote no log lines, but each still got a span: `initialize`, `notifications/initialized` and `tools/list`, each a trace of its own, since they didn't carry the client's.
 - rmcp's own lines aren't there: the program keeps rmcp to its warnings, as [For production](#for-production) explains.
+- Over HTTP, the server is wrapped differently: [an MCP server over HTTP](/scenarios/mcp-http/) shows how.
 
 CI runs the example with this session and checks it still prints these lines.
 
@@ -76,6 +77,6 @@ Tool arguments and results aren't recorded, since they may hold personal or secr
 
 - **Keep standard output for the protocol.** Don't set `OXTEL_LOG_OUTPUT=stdout`, and don't turn on the console exporters, such as `OTEL_TRACES_EXPORTER=console`: they print on standard output, and the client would try to read what they print as protocol messages.
 - **Configure it in the client.** The client starts the server, so the server's environment comes from the client's settings for it. Set `OTEL_EXPORTER_OTLP_ENDPOINT` and `OTEL_SERVICE_NAME` there. Many clients keep what the server writes to standard error in a log of their own.
-- **Keep rmcp to its warnings.** rmcp logs each session's start and end at `info`, in a span of its own that lasts the whole session, and every request that doesn't continue a trace of the client's would be part of that one long trace. The example keeps rmcp to its warnings unless `RUST_LOG` is set; if you set `RUST_LOG`, include `rmcp=warn`.
+- **Keep rmcp to its warnings.** rmcp logs each session's start and end at `info`, with everything the client said about itself, in a span of its own that lasts the whole session. The example keeps rmcp to its warnings unless `RUST_LOG` is set; if you set `RUST_LOG`, include `rmcp=warn`.
 - **Let the session end.** The server stops when the client closes its standard input, and `main` returning sends what's left. A client that kills the server instead loses what hasn't been sent yet, the last few seconds.
 - **Callers' trace ids.** The server continues any trace a client sends. For a server that untrusted clients reach, `.with_propagation(false)` starts a new trace for every request instead.

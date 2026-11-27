@@ -47,9 +47,9 @@ impl Calculator {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // rmcp logs each session's start and end at `info`, in a span that lasts
-    // the whole session, and requests without a trace of the client's would
-    // join it. Keep rmcp to its warnings, unless RUST_LOG says otherwise.
+    // rmcp logs each session's start and end at `info`, with everything the
+    // client said about itself, in a span of its own. Keep rmcp to its
+    // warnings, unless RUST_LOG says otherwise.
     let filter = std::env::var("RUST_LOG").unwrap_or_else(|_| "info,rmcp=warn".into());
     // First, so the MCP metrics find oxtel's recorder. Keep the guard until
     // main returns: dropping it sends what's left.
