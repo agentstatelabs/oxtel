@@ -32,7 +32,7 @@ use std::path::Path;
 
 pub use model::{
     AttributeValue, Config, ExporterConfig, Limits, LoggerProviderConfig, MeterProviderConfig,
-    OtlpHttpConfig, ProcessorConfig, ReaderConfig, ResourceConfig, SamplerConfig,
+    OtlpFileConfig, OtlpHttpConfig, ProcessorConfig, ReaderConfig, ResourceConfig, SamplerConfig,
     TracerProviderConfig,
 };
 

@@ -30,14 +30,20 @@
 //! .unwrap();
 //! ```
 //!
+//! [`OtlpFileExporter`] writes the same data as OTLP/JSON lines, to
+//! standard output or a file, and needs no HTTP client.
+//!
 //! The protocol types are in [`proto`], generated from the official
 //! definitions; [`transform`] converts oxtel's data model to them.
 
+mod file;
 #[cfg(feature = "http-proto")]
 mod http;
 pub mod json;
 pub mod proto;
 pub mod transform;
+
+pub use file::OtlpFileExporter;
 
 #[cfg(feature = "http-proto")]
 pub use http::{

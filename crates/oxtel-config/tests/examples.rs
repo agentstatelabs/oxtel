@@ -2,8 +2,8 @@
 //! gets.
 
 use oxtel_config::{
-    AttributeValue, Config, Error, ExporterConfig, OtlpHttpConfig, ProcessorConfig, ReaderConfig,
-    SamplerConfig, parse_with,
+    AttributeValue, Config, Error, ExporterConfig, OtlpFileConfig, OtlpHttpConfig, ProcessorConfig,
+    ReaderConfig, SamplerConfig, parse_with,
 };
 
 fn fixture(name: &str) -> String {
@@ -248,6 +248,49 @@ unknown_top_level: 1
     for expected in ["otlp_grpc", "jaeger_remote", "views", "unknown_top_level"] {
         assert!(w.contains(expected), "no warning about {expected}:\n{w}");
     }
+}
+
+#[test]
+fn otlp_file_writes_json_lines_to_stdout_or_a_file() {
+    let text = r#"
+file_format: "1.2"
+tracer_provider:
+  processors:
+    - batch:
+        exporter:
+          otlp_file/development:
+            output_stream: file:///var/log/traces.jsonl
+meter_provider:
+  readers:
+    - periodic:
+        exporter:
+          otlp_file/development:
+"#;
+    let parsed = parse_with(text, &|_| None).unwrap();
+    assert!(parsed.warnings.is_empty(), "{:#?}", parsed.warnings);
+    assert!(matches!(
+        &parsed.config.tracer_provider.unwrap().processors[0],
+        ProcessorConfig::Batch {
+            exporter: ExporterConfig::OtlpFile(OtlpFileConfig { output_stream: Some(s) }),
+            ..
+        } if s == "file:///var/log/traces.jsonl"
+    ));
+    assert!(matches!(
+        &parsed.config.meter_provider.unwrap().readers[0],
+        ReaderConfig::Periodic {
+            exporter: ExporterConfig::OtlpFile(OtlpFileConfig {
+                output_stream: None
+            }),
+            ..
+        }
+    ));
+
+    let bad = "file_format: \"1.2\"\ntracer_provider:\n  processors:\n    - simple:\n        exporter:\n          otlp_file/development:\n            output_stream: /var/log/traces.jsonl\n";
+    let error = parse_with(bad, &|_| None).unwrap_err().to_string();
+    assert!(
+        error.contains("output_stream") && error.contains("file://"),
+        "{error}"
+    );
 }
 
 #[test]
