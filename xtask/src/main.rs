@@ -402,8 +402,9 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
 
 /// `text` with each timestamp (`2026-10-09T12:00:00.123456Z`) replaced by
 /// `<time>`, each trace or span id (32 or 16 lowercase hex digits) by
-/// `<id>`, each span's duration (`duration=0.042ms`) by
-/// `duration=<duration>`, and the request duration on an access log line
+/// `<id>`, each UUID, such as an MCP session's id, by `<uuid>`, each
+/// span's duration (`duration=0.042ms`) by `duration=<duration>`, and the
+/// request duration on an access log line
 /// (`http.server.request.duration=0.000044`, or in JSON
 /// `"http.server.request.duration":0.000044`) by `<duration>`.
 fn shape(text: &str) -> String {
@@ -420,6 +421,11 @@ fn shape(text: &str) -> String {
             }
             if let Some(len) = duration_len(&bytes[i..]) {
                 out.push_str("duration=<duration>");
+                i += len;
+                continue;
+            }
+            if let Some(len) = uuid_len(&bytes[i..]) {
+                out.push_str("<uuid>");
                 i += len;
                 continue;
             }
@@ -485,6 +491,20 @@ fn duration_len(bytes: &[u8]) -> Option<usize> {
     (number > 0 && bytes[len..].starts_with(b"ms")).then_some(len + 2)
 }
 
+/// The length of the UUID `bytes` starts with, in lowercase hex, if any.
+fn uuid_len(bytes: &[u8]) -> Option<usize> {
+    const PATTERN: &[u8] = b"xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx";
+    let fits = bytes.len() >= PATTERN.len()
+        && PATTERN.iter().zip(bytes).all(|(p, b)| match p {
+            b'x' => b.is_ascii_digit() || (b'a'..=b'f').contains(b),
+            p => p == b,
+        });
+    let ends_word = bytes
+        .get(PATTERN.len())
+        .is_some_and(u8::is_ascii_alphanumeric);
+    (fits && !ends_word).then_some(PATTERN.len())
+}
+
 /// The length of the access log's request duration that `bytes` starts
 /// with, if any: the key with its `=` or `":`, and the whole.
 fn request_duration_len(bytes: &[u8]) -> Option<(usize, usize)> {
@@ -539,6 +559,11 @@ mod tests {
         assert_eq!(
             shape(r#"{"http.server.request.duration":4.4e-5,"message":"request"}"#),
             r#"{"http.server.request.duration":<duration>,"message":"request"}"#
+        );
+        // A session id.
+        assert_eq!(
+            shape("mcp.session.id=1dd5f136-68df-44ee-83a1-228600f916c1 mcp.protocol.version"),
+            "mcp.session.id=<uuid> mcp.protocol.version"
         );
         // Not a span's duration: a field of the program's own.
         assert_eq!(

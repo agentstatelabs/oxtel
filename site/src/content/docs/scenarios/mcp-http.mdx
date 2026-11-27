@@ -1,0 +1,86 @@
+---
+title: An MCP server over HTTP
+description: An MCP server on streamable HTTP in an axum app, and a client calling it, with one trace from the client's work into the tool.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+An MCP server that clients reach over the network with MCP's streamable HTTP transport, mounted in an axum app. Every request gets:
+
+- a span named for what it asks, such as `tools/call add`, which continues the client's trace when the client sends one;
+- the session's id, the protocol version and the transport, on that span and on every log line the tool writes;
+- its duration in `mcp.server.operation.duration`.
+
+The client is instrumented too. `oxtel_rmcp::client::call_tool` makes the call in a client span of its own and sends the trace along in `_meta`, so one trace runs from the client's work into the tool. Here the server and client are in one program, which calls its own server once and stops, so one command shows both sides.
+
+## The code
+
+<Example file="examples/mcp-http.rs" />
+
+rmcp's HTTP server takes a `ServerHandler`, the trait the tools are written against, rather than a service. So the server is wrapped in `InstrumentedHandler`, not the `Instrumented` that [the stdio server](/scenarios/mcp-stdio/) uses. Both record the same spans and metrics. `InstrumentedHandler` is new in oxtel-rmcp 0.4.1.
+
+## Dependencies
+
+<Example file="examples/mcp-http.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/mcp-http.rs" doc="bash" />
+
+## What it prints
+
+The log lines of the server's tool and of the client:
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/mcp-http.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/mcp-http.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+- The tool's line and the client's `answered` line have the same trace id. The client's work, its call and the server's work on it are one trace.
+- In JSON, the tool's line also carries the session's id, `mcp.session.id`, and the transport: `tcp`, with HTTP 1.1.
+
+With `OTEL_TRACES_EXPORTER=console`, as in the second command above, the spans are printed on standard output as they end:
+
+<Example file="examples/output/mcp-http.spans" title="Standard output" wrap />
+
+- The server's `tools/call add` has the client's `tools/call add` as its parent, and that has `ask`. That's the chain a backend draws as a tree.
+- `initialize` and `notifications/initialized` are each a trace of their own, since they don't carry a trace of the client's.
+- `initialize` has no session id, since the server starts the session while answering it.
+- Both sides record the protocol version they agreed on.
+
+CI runs the example both ways and checks it still prints these lines.
+
+## What's recorded
+
+The names follow the OpenTelemetry conventions for MCP, which are still in development.
+
+| | |
+|---|---|
+| Span name | The method, and the tool, prompt or resource it's for, such as `tools/call add`, on both sides |
+| `mcp.method.name` | `tools/call` |
+| `jsonrpc.request.id` | The request's id, on the server's span; notifications have none |
+| `mcp.session.id` | The session the request belongs to, on the server's span |
+| `mcp.protocol.version` | The protocol version the client and server agreed on |
+| `gen_ai.tool.name` | For a tool call, the tool, with `gen_ai.operation.name` set to `execute_tool` |
+| `network.transport`, `network.protocol.name`, `network.protocol.version` | `tcp`, `http` and the HTTP version, on the server's span |
+| `error.type` | `tool_error` when a tool reports a failure, or the JSON-RPC error code when the server fails |
+| `mcp.server.operation.duration` | A histogram of each request's duration in seconds, on the server |
+| `mcp.server.session.duration` | Each session's duration in seconds, when it ends |
+| `mcp.client.operation.duration` | A histogram of each call's duration in seconds, on the client |
+
+Tool arguments and results aren't recorded, since they may hold personal or secret data. On the server, `.with_payloads(true)` records them; on the client, `ClientOptions { payloads: true, ..Default::default() }` in place of `Default::default()`.
+
+## For production
+
+- **Run it until it's stopped,** and stop gracefully, as in [a web service](/scenarios/web-service/), so the last requests' telemetry is sent.
+- **Allow your host name.** rmcp's HTTP server accepts only requests addressed to `localhost`, `127.0.0.1` or `::1` unless told otherwise, which guards against DNS rebinding. Behind a domain, pass a `StreamableHttpServerConfig` with `with_allowed_hosts` naming it.
+- **Keep rmcp to its warnings.** rmcp logs every session's start and end at `info`, with everything the client said about itself, in spans of its own. The example keeps rmcp to its warnings unless `RUST_LOG` is set; if you set `RUST_LOG`, include `rmcp=warn`.
+- **Callers' trace ids.** The server continues any trace a client sends. For a server that untrusted clients reach, `.with_propagation(false)` starts a new trace for every request instead.
+- **What isn't recorded.** `InstrumentedHandler` sees a request once rmcp hands it to the server's code. A request rmcp turns away itself, such as one for a protocol version the server doesn't support, gets no span.

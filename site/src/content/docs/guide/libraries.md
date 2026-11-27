@@ -10,7 +10,7 @@ description: The crates that add spans and metrics for HTTP servers and clients,
 | `oxtel-tower` | HTTP servers and clients built on tower: axum and hyper | A layer: `.layer(oxtel_tower::HttpServerLayer::new())` |
 | `oxtel-reqwest` | reqwest clients | One line where the client is made: `oxtel_reqwest::client(reqwest::Client::new())` |
 | `oxtel-sql` | SQLite through rusqlite, PostgreSQL through tokio-postgres or deadpool-postgres, and sqlx | One line where the connection or pool is made |
-| `oxtel-rmcp` | MCP servers and clients built with rmcp 3 | A wrapper around the server: `oxtel_rmcp::Instrumented::new(server)` |
+| `oxtel-rmcp` | MCP servers and clients built with rmcp 3 | A wrapper around the server: `oxtel_rmcp::Instrumented::new(server)`, or `InstrumentedHandler` over HTTP |
 | `oxtel-genai` | Calls to generative AI models, through any client | A few lines around each call |
 | `oxtel-tokio` | The tokio runtime | One line at startup: `oxtel_tokio::record(&Handle::current())` |
 
@@ -30,7 +30,7 @@ Query strings and credentials in URLs are never recorded. [A web service](/scena
 
 `oxtel_reqwest::client` wraps a reqwest client in reqwest-middleware's `ClientWithMiddleware`, whose methods are reqwest's own, so the code that makes requests doesn't change. Every request gets the client span, trace headers and `http.client.request.duration` that oxtel-tower's client layer records. A request that gets no response is an error, with `error.type` saying why, such as `timeout` or `connect`.
 
-For requests that leave your systems, don't send your trace ids along: add `oxtel_reqwest::HttpClientMiddleware::new().with_propagation(false)` to a client of your own instead. Its [documentation](https://docs.rs/oxtel-reqwest) shows how.
+For requests that leave your systems, don't send your trace ids along: add `oxtel_reqwest::HttpClientMiddleware::new().with_propagation(false)` to a client of your own instead. Its [documentation](https://docs.rs/oxtel-reqwest) shows how. [Two services](/scenarios/two-services/) has a whole program, with one trace across both.
 
 ## Databases: oxtel-sql
 
@@ -44,7 +44,7 @@ sqlx needs no code at all for the basics: `oxtel::init()` turns the event sqlx w
 
 Tool arguments and results aren't recorded unless you ask, since they may hold personal or secret data.
 
-It serves over standard input and output, or any other stream rmcp can serve over. rmcp 3's streamable HTTP server accepts only a `ServerHandler`, which `Instrumented` isn't yet, so a server served over HTTP can't be wrapped yet. A fix is planned.
+`Instrumented` serves over standard input and output, or any other stream rmcp can serve over. rmcp's streamable HTTP server takes a `ServerHandler` rather than a service, so there, wrap the server in `oxtel_rmcp::InstrumentedHandler`, new in 0.4.1. It records the same, with the session's id and the HTTP transport too. [An MCP server over stdio](/scenarios/mcp-stdio/) and [an MCP server over HTTP](/scenarios/mcp-http/) have whole programs.
 
 ## Generative AI: oxtel-genai
 
