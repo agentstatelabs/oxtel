@@ -5,6 +5,9 @@
 //! - [`Instrumented`] wraps an rmcp server: a span per request and
 //!   notification, continuing the caller's trace from `params._meta`, with
 //!   `mcp.server.operation.duration` and `mcp.server.session.duration`.
+//! - [`InstrumentedHandler`] does the same for where rmcp takes a
+//!   `ServerHandler` rather than a service, such as its streamable HTTP
+//!   server.
 //! - With the `client` feature, `client::send` and `client::call_tool`
 //!   send requests in client spans, carrying the trace in `params._meta`,
 //!   and record `mcp.client.operation.duration`.
@@ -19,4 +22,4 @@ mod common;
 mod server;
 
 pub use common::describe_metrics;
-pub use server::Instrumented;
+pub use server::{Instrumented, InstrumentedHandler};

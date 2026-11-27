@@ -28,8 +28,10 @@ tracing = { version = "0.1.44", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 oxtel-semconv = { path = "../oxtel-semconv", features = ["experimental"] }
-rmcp = { version = "3.5", default-features = false, features = ["server", "client"] }
-tokio = { version = "1", features = ["macros", "rt", "io-util"] }
+# The HTTP transports, for InstrumentedHandler's tests and documentation.
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
+rmcp = { version = "3.5", default-features = false, features = ["server", "client", "transport-streamable-http-server", "transport-streamable-http-client-reqwest"] }
+tokio = { version = "1", features = ["macros", "rt", "io-util", "net"] }
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 
 [package.metadata.docs.rs]

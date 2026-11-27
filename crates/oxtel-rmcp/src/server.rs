@@ -1,13 +1,37 @@
-//! The server side: a wrapper around any rmcp server.
+//! The server side: wrappers around any rmcp server.
 
+use std::borrow::Cow;
 use std::future::Future;
 use std::sync::{Arc, OnceLock};
 use std::time::Instant;
 
+use oxtel_sdk::SpanContext;
 use oxtel_sdk::propagation::extract_trace_context;
 use oxtel_sdk::trace::attach_remote_parent;
-use rmcp::model::{ClientNotification, ClientRequest, ConstString, ErrorData, ServerResult};
-use rmcp::service::{NotificationContext, RequestContext, RoleServer, Service};
+use rmcp::ServerHandler;
+use rmcp::model::{
+    CallToolRequestMethod, CallToolRequestParams, CallToolResponse, CallToolResult,
+    CancelTaskMethod, CancelTaskParams, CancelledNotificationMethod, CancelledNotificationParam,
+    ClientNotification, ClientRequest, CompleteRequestMethod, CompleteRequestParams,
+    CompleteResult, ConstString, CustomNotification, CustomRequest, CustomResult,
+    DiscoverRequestMethod, DiscoverResult, ErrorData, GetPromptRequestMethod,
+    GetPromptRequestParams, GetPromptResponse, GetTaskMethod, GetTaskParams, GetTaskResult,
+    InitializeRequestParams, InitializeResult, InitializeResultMethod,
+    InitializedNotificationMethod, JsonObject, ListPromptsRequestMethod, ListPromptsResult,
+    ListResourceTemplatesRequestMethod, ListResourceTemplatesResult, ListResourcesRequestMethod,
+    ListResourcesResult, ListToolsRequestMethod, ListToolsResult, PaginatedRequestParams,
+    PingRequestMethod, ProgressNotificationMethod, ProgressNotificationParam, ProtocolVersion,
+    ReadResourceRequestMethod, ReadResourceRequestParams, ReadResourceResponse,
+    RootsListChangedNotificationMethod, ServerConfig, ServerResult, SetLevelRequestMethod,
+    SubscribeRequestMethod, SubscribeRequestParams, SubscriptionFilter, Tool,
+    UnsubscribeRequestMethod, UnsubscribeRequestParams, UpdateTaskMethod, UpdateTaskParams,
+};
+// Logging is deprecated by SEP-2577, but clients may still ask for it.
+#[allow(deprecated)]
+use rmcp::model::SetLevelRequestParams;
+use rmcp::service::{
+    MaybeSendFuture, NotificationContext, RequestContext, RoleServer, Service, SubscriptionContext,
+};
 use tracing::Instrument;
 use tracing::field::Empty;
 
@@ -44,7 +68,8 @@ struct Config {
 ///
 /// - **a span** named `{mcp.method.name} {target}`, such as
 ///   `tools/call commit`, a child of the caller's span when `params._meta`
-///   carries W3C `traceparent`. Attributes: `mcp.method.name`,
+///   carries W3C `traceparent`, and otherwise the start of a trace of its
+///   own. Attributes: `mcp.method.name`,
 ///   `jsonrpc.request.id`, `mcp.session.id` (over HTTP),
 ///   `mcp.protocol.version`, `gen_ai.tool.name` with
 ///   `gen_ai.operation.name` `execute_tool`, `gen_ai.prompt.name`,
@@ -61,6 +86,9 @@ struct Config {
 ///
 /// Tool arguments and results aren't recorded unless
 /// [`with_payloads`](Instrumented::with_payloads) asks for them.
+///
+/// Where rmcp takes a `ServerHandler` rather than a service, as its
+/// streamable HTTP server does, use [`InstrumentedHandler`].
 pub struct Instrumented<S> {
     inner: S,
     config: Arc<Config>,
@@ -157,6 +185,37 @@ impl Network {
     }
 }
 
+/// The span of an operation `$op`, with every field declared, and an
+/// explicit parent if one is given.
+macro_rules! server_span {
+    ($op:expr, $id:expr $(, parent: $parent:expr)?) => {
+        tracing::info_span!(
+            target: "oxtel_rmcp",
+            $(parent: $parent,)?
+            "MCP server operation",
+            otel.name = %$op.target.span_name(&$op.method),
+            otel.kind = "server",
+            mcp.method.name = $op.method.as_str(),
+            jsonrpc.request.id = $id,
+            mcp.session.id = $op.network.session.as_deref(),
+            mcp.protocol.version = $op.protocol_version.as_deref(),
+            gen_ai.tool.name = $op.target.tool.as_deref(),
+            gen_ai.operation.name = $op.target.operation(),
+            gen_ai.prompt.name = $op.target.prompt.as_deref(),
+            mcp.resource.uri = $op.target.resource.as_deref(),
+            network.transport = $op.network.transport,
+            network.protocol.name = $op.network.protocol,
+            network.protocol.version = $op.network.version,
+            gen_ai.tool.call.arguments = Empty,
+            gen_ai.tool.call.result = Empty,
+            rpc.response.status_code = Empty,
+            error.type = Empty,
+            otel.status_code = Empty,
+            otel.status_description = Empty,
+        )
+    };
+}
+
 /// What every span and measurement of one operation carries.
 struct Operation {
     method: String,
@@ -192,30 +251,18 @@ impl Operation {
         labels
     }
 
-    fn span(&self, id: Option<String>) -> tracing::Span {
-        tracing::info_span!(
-            target: "oxtel_rmcp",
-            "MCP server operation",
-            otel.name = %self.target.span_name(&self.method),
-            otel.kind = "server",
-            mcp.method.name = self.method.as_str(),
-            jsonrpc.request.id = id,
-            mcp.session.id = self.network.session.as_deref(),
-            mcp.protocol.version = self.protocol_version.as_deref(),
-            gen_ai.tool.name = self.target.tool.as_deref(),
-            gen_ai.operation.name = self.target.operation(),
-            gen_ai.prompt.name = self.target.prompt.as_deref(),
-            mcp.resource.uri = self.target.resource.as_deref(),
-            network.transport = self.network.transport,
-            network.protocol.name = self.network.protocol,
-            network.protocol.version = self.network.version,
-            gen_ai.tool.call.arguments = Empty,
-            gen_ai.tool.call.result = Empty,
-            rpc.response.status_code = Empty,
-            error.type = Empty,
-            otel.status_code = Empty,
-            otel.status_description = Empty,
-        )
+    /// The operation's span. With the caller's context, it continues the
+    /// caller's trace; without, it starts a trace of its own, rather than
+    /// joining whatever span the transport runs it in, such as rmcp's span
+    /// around a whole session.
+    fn span(&self, id: Option<String>, caller: Option<SpanContext>) -> tracing::Span {
+        match caller {
+            Some(caller) => {
+                let _parent = attach_remote_parent(caller);
+                server_span!(self, id)
+            }
+            None => server_span!(self, id, parent: None),
+        }
     }
 
     /// Record how it ended on the span and in the duration metric.
@@ -255,31 +302,130 @@ impl Operation {
     }
 }
 
-impl<S: Service<RoleServer>> Instrumented<S> {
+/// Whether a tool's result is a failure, recording its content first when
+/// payloads are on.
+fn tool_failed(result: &CallToolResult, span: &tracing::Span, payloads: bool) -> bool {
+    if payloads {
+        span.record("gen_ai.tool.call.result", payload(&result.content).as_str());
+    }
+    result.is_error == Some(true)
+}
+
+/// What both wrappers share: from a request or notification to its span,
+/// and from its result to the measurements.
+impl<S> Instrumented<S> {
+    /// The caller's context from `params._meta`, if propagation is on.
+    fn caller(&self, meta: &JsonObject) -> Option<SpanContext> {
+        if !self.config.propagate {
+            return None;
+        }
+        extract_trace_context(&MetaReader(meta))
+    }
+
+    /// Note that the session started, with this protocol version.
+    fn initializing(&self, version: &ProtocolVersion) {
+        let _ = self.session_started.set(Instant::now());
+        let _ = self.protocol_version.set(version.as_str().to_string());
+    }
+
     fn operation(
         &self,
-        method: String,
+        method: &str,
         target: Target,
         extensions: &rmcp::model::Extensions,
-        peer_version: Option<String>,
+        version: Option<ProtocolVersion>,
     ) -> Operation {
-        let protocol_version = self.protocol_version.get().cloned().or(peer_version);
         Operation {
-            method,
+            method: method.to_string(),
             target,
-            protocol_version,
+            protocol_version: self
+                .protocol_version
+                .get()
+                .cloned()
+                .or_else(|| version.map(|v| v.as_str().to_string())),
             network: Network::of(extensions, self.config.transport),
         }
     }
 
-    fn parent(
+    /// A request's operation, and its span.
+    fn request(
         &self,
-        meta: &rmcp::model::JsonObject,
-    ) -> Option<oxtel_sdk::trace::RemoteParentGuard> {
-        if !self.config.propagate {
-            return None;
+        method: &str,
+        target: Target,
+        context: &RequestContext<RoleServer>,
+    ) -> (Operation, tracing::Span) {
+        let operation = self.operation(
+            method,
+            target,
+            &context.extensions,
+            context.protocol_version(),
+        );
+        let span = operation.span(Some(context.id.to_string()), self.caller(&context.meta.0));
+        (operation, span)
+    }
+
+    /// A notification's operation, and its span.
+    fn notification(
+        &self,
+        method: &str,
+        context: &NotificationContext<RoleServer>,
+    ) -> (Operation, tracing::Span) {
+        let version = context
+            .peer
+            .peer_info()
+            .map(|info| info.protocol_version.clone());
+        let operation = self.operation(method, Target::default(), &context.extensions, version);
+        let span = operation.span(None, self.caller(&context.meta.0));
+        (operation, span)
+    }
+
+    /// Run `inner` in `span`, then record how it ended. `tool_error` says
+    /// whether a result is a tool's failure.
+    fn observe<'a, T: 'a>(
+        &self,
+        operation: Operation,
+        span: tracing::Span,
+        inner: impl Future<Output = Result<T, ErrorData>> + 'a,
+        tool_error: impl FnOnce(&T, &tracing::Span, bool) -> bool + 'a,
+    ) -> impl Future<Output = Result<T, ErrorData>> + 'a {
+        let config = Arc::clone(&self.config);
+        let started = Instant::now();
+        let recorded = span.clone();
+        async move {
+            let result = inner.await;
+            let failed_tool = result
+                .as_ref()
+                .is_ok_and(|r| tool_error(r, &recorded, config.payloads));
+            operation.finish(
+                &recorded,
+                result.as_ref().err(),
+                failed_tool,
+                &config,
+                started,
+            );
+            result
         }
-        extract_trace_context(&MetaReader(meta)).map(attach_remote_parent)
+        .instrument(span)
+    }
+
+    /// Run a handler's notification method in `span`, then record it.
+    fn observe_notification<'a>(
+        &self,
+        (operation, span): (Operation, tracing::Span),
+        inner: impl Future<Output = ()> + 'a,
+    ) -> impl Future<Output = ()> + 'a {
+        let observed = self.observe(
+            operation,
+            span,
+            async move {
+                inner.await;
+                Ok::<(), ErrorData>(())
+            },
+            |_, _, _| false,
+        );
+        async move {
+            let _ = observed.await;
+        }
     }
 }
 
@@ -290,25 +436,9 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
         context: RequestContext<RoleServer>,
     ) -> impl Future<Output = Result<ServerResult, ErrorData>> + Send + '_ {
         if let ClientRequest::InitializeRequest(init) = &request {
-            let _ = self.session_started.set(Instant::now());
-            let _ = self
-                .protocol_version
-                .set(init.params.protocol_version.as_str().to_string());
+            self.initializing(&init.params.protocol_version);
         }
-        let peer_version = context
-            .peer
-            .peer_info()
-            .map(|info| info.protocol_version.as_str().to_string());
-        let operation = self.operation(
-            request.method().to_string(),
-            Target::of(&request),
-            &context.extensions,
-            peer_version,
-        );
-        let span = {
-            let _parent = self.parent(&context.meta.0);
-            operation.span(Some(context.id.to_string()))
-        };
+        let (operation, span) = self.request(request.method(), Target::of(&request), &context);
         if self.config.payloads
             && let ClientRequest::CallToolRequest(call) = &request
         {
@@ -317,31 +447,16 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
                 payload(&call.params.arguments).as_str(),
             );
         }
-        let config = Arc::clone(&self.config);
-        let started = Instant::now();
         let inner = self.inner.handle_request(request, context);
-        let recorded = span.clone();
-        async move {
-            let result = inner.await;
-            let tool_error = match &result {
-                Ok(ServerResult::CallToolResult(r)) => {
-                    if config.payloads {
-                        recorded.record("gen_ai.tool.call.result", payload(&r.content).as_str());
-                    }
-                    r.is_error == Some(true)
-                }
+        self.observe(
+            operation,
+            span,
+            inner,
+            |result, span, payloads| match result {
+                ServerResult::CallToolResult(r) => tool_failed(r, span, payloads),
                 _ => false,
-            };
-            operation.finish(
-                &recorded,
-                result.as_ref().err(),
-                tool_error,
-                &config,
-                started,
-            );
-            result
-        }
-        .instrument(span)
+            },
+        )
     }
 
     fn handle_notification(
@@ -359,31 +474,406 @@ impl<S: Service<RoleServer>> Service<RoleServer> for Instrumented<S> {
             // rmcp release is recorded as _OTHER until oxtel learns its name.
             _ => "_OTHER".to_string(),
         };
-        let peer_version = context
-            .peer
-            .peer_info()
-            .map(|info| info.protocol_version.as_str().to_string());
-        let operation =
-            self.operation(method, Target::default(), &context.extensions, peer_version);
-        let span = {
-            let _parent = self.parent(&context.meta.0);
-            operation.span(None)
-        };
-        let config = Arc::clone(&self.config);
-        let started = Instant::now();
+        let (operation, span) = self.notification(&method, &context);
         let inner = self.inner.handle_notification(notification, context);
-        let recorded = span.clone();
-        async move {
-            let result = inner.await;
-            operation.finish(&recorded, result.as_ref().err(), false, &config, started);
-            result
-        }
-        .instrument(span)
+        self.observe(operation, span, inner, |_, _, _| false)
     }
 
     fn get_info(&self) -> <RoleServer as rmcp::service::ServiceRole>::Info {
         self.inner.get_info()
     }
+}
+
+/// An rmcp [`ServerHandler`] instrumented as [`Instrumented`] instruments a
+/// service, for where rmcp takes only a `ServerHandler`, such as its
+/// streamable HTTP server:
+///
+/// ```no_run
+/// use std::sync::Arc;
+///
+/// use rmcp::transport::StreamableHttpService;
+/// use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
+/// # fn app(server: impl rmcp::ServerHandler + Clone) -> axum::Router {
+///
+/// // A server for each session, each instrumented.
+/// let mcp = StreamableHttpService::new(
+///     move || Ok(oxtel_rmcp::InstrumentedHandler::new(server.clone())),
+///     Arc::new(LocalSessionManager::default()),
+///     Default::default(),
+/// );
+/// axum::Router::new().nest_service("/mcp", mcp)
+/// # }
+/// ```
+///
+/// Over HTTP, each span also records `network.transport` `tcp`,
+/// `network.protocol.name` and `version`, and, for a session,
+/// `mcp.session.id`.
+///
+/// It sees each request once rmcp has handed it to one of the handler's
+/// methods, so it doesn't see a request rmcp turns away itself, such as one
+/// for a protocol version the server doesn't support. [`Instrumented`]
+/// records those too, where rmcp takes a service. A `subscriptions/listen`
+/// request, which lasts as long as its subscription, isn't recorded.
+pub struct InstrumentedHandler<S>(Instrumented<S>);
+
+impl<S> InstrumentedHandler<S> {
+    /// Instrument `inner`, with propagation and metrics on and payloads off.
+    /// Describes the metrics to the current recorder, so make it after
+    /// installing one.
+    pub fn new(inner: S) -> Self {
+        InstrumentedHandler(Instrumented::new(inner))
+    }
+
+    /// Continue the caller's trace from `params._meta`. Default: true.
+    pub fn with_propagation(self, enabled: bool) -> Self {
+        InstrumentedHandler(self.0.with_propagation(enabled))
+    }
+
+    /// Record the MCP metrics. Default: true.
+    pub fn with_metrics(self, enabled: bool) -> Self {
+        InstrumentedHandler(self.0.with_metrics(enabled))
+    }
+
+    /// Record tool arguments and results as `gen_ai.tool.call.arguments` and
+    /// `gen_ai.tool.call.result`, as JSON cut at 16 KiB. They may hold
+    /// personal or secret data. Default: false.
+    pub fn with_payloads(self, enabled: bool) -> Self {
+        InstrumentedHandler(self.0.with_payloads(enabled))
+    }
+
+    /// The `network.transport` to record when the request didn't come over
+    /// HTTP: `pipe` for stdio. Over HTTP it's `tcp`.
+    pub fn with_transport(self, transport: &'static str) -> Self {
+        InstrumentedHandler(self.0.with_transport(transport))
+    }
+
+    /// The server inside.
+    pub fn inner(&self) -> &S {
+        self.0.inner()
+    }
+}
+
+impl<S> From<Instrumented<S>> for InstrumentedHandler<S> {
+    fn from(instrumented: Instrumented<S>) -> Self {
+        InstrumentedHandler(instrumented)
+    }
+}
+
+/// A request method: its span around the inner handler's method.
+macro_rules! request {
+    ($name:ident, $method:ty, $params:ty, $result:ty $(, $target:expr)?) => {
+        fn $name(
+            &self,
+            request: $params,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<$result, ErrorData>> + MaybeSendFuture + '_ {
+            #[allow(unused_variables)]
+            let target = Target::default();
+            $(let target = $target(&request);)?
+            let (operation, span) = self.0.request(<$method>::VALUE, target, &context);
+            self.0.observe(
+                operation,
+                span,
+                self.0.inner.$name(request, context),
+                |_, _, _| false,
+            )
+        }
+    };
+}
+
+/// A request method without parameters.
+macro_rules! bare_request {
+    ($name:ident, $method:ty, $result:ty) => {
+        fn $name(
+            &self,
+            context: RequestContext<RoleServer>,
+        ) -> impl Future<Output = Result<$result, ErrorData>> + MaybeSendFuture + '_ {
+            let (operation, span) = self
+                .0
+                .request(<$method>::VALUE, Target::default(), &context);
+            self.0
+                .observe(operation, span, self.0.inner.$name(context), |_, _, _| {
+                    false
+                })
+        }
+    };
+}
+
+fn prompt(request: &GetPromptRequestParams) -> Target {
+    Target {
+        prompt: Some(request.name.clone()),
+        ..Target::default()
+    }
+}
+
+fn resource(uri: &str) -> Target {
+    Target {
+        resource: Some(uri.to_string()),
+        ..Target::default()
+    }
+}
+
+// Every method is forwarded, so the inner handler's own versions are used.
+// A method that a later rmcp release adds gets rmcp's default until it's
+// forwarded here too.
+impl<S: ServerHandler> ServerHandler for InstrumentedHandler<S> {
+    bare_request!(ping, PingRequestMethod, ());
+
+    fn initialize(
+        &self,
+        request: InitializeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<InitializeResult, ErrorData>> + MaybeSendFuture + '_ {
+        self.0.initializing(&request.protocol_version);
+        let (operation, span) =
+            self.0
+                .request(InitializeResultMethod::VALUE, Target::default(), &context);
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.initialize(request, context),
+            |_, _, _| false,
+        )
+    }
+
+    fn negotiate_initialize(
+        &self,
+        request: &InitializeRequestParams,
+    ) -> Result<InitializeResult, ErrorData> {
+        self.0.inner.negotiate_initialize(request)
+    }
+
+    fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
+        self.0.inner.supported_protocol_versions()
+    }
+
+    bare_request!(discover, DiscoverRequestMethod, DiscoverResult);
+    request!(
+        complete,
+        CompleteRequestMethod,
+        CompleteRequestParams,
+        CompleteResult
+    );
+    #[allow(deprecated)]
+    fn set_level(
+        &self,
+        request: SetLevelRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), ErrorData>> + MaybeSendFuture + '_ {
+        let (operation, span) =
+            self.0
+                .request(SetLevelRequestMethod::VALUE, Target::default(), &context);
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.set_level(request, context),
+            |_, _, _| false,
+        )
+    }
+    request!(
+        get_prompt,
+        GetPromptRequestMethod,
+        GetPromptRequestParams,
+        GetPromptResponse,
+        prompt
+    );
+    request!(
+        list_prompts,
+        ListPromptsRequestMethod,
+        Option<PaginatedRequestParams>,
+        ListPromptsResult
+    );
+    request!(
+        list_resources,
+        ListResourcesRequestMethod,
+        Option<PaginatedRequestParams>,
+        ListResourcesResult
+    );
+    request!(
+        list_resource_templates,
+        ListResourceTemplatesRequestMethod,
+        Option<PaginatedRequestParams>,
+        ListResourceTemplatesResult
+    );
+    request!(
+        read_resource,
+        ReadResourceRequestMethod,
+        ReadResourceRequestParams,
+        ReadResourceResponse,
+        |r: &ReadResourceRequestParams| resource(&r.uri)
+    );
+
+    fn accepted_subscription_filter(
+        &self,
+        requested: &SubscriptionFilter,
+    ) -> Option<SubscriptionFilter> {
+        self.0.inner.accepted_subscription_filter(requested)
+    }
+
+    fn listen(
+        &self,
+        context: SubscriptionContext,
+    ) -> impl Future<Output = Result<(), ErrorData>> + MaybeSendFuture + '_ {
+        self.0.inner.listen(context)
+    }
+
+    #[allow(deprecated)]
+    fn subscribe(
+        &self,
+        request: SubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), ErrorData>> + MaybeSendFuture + '_ {
+        let (operation, span) = self.0.request(
+            SubscribeRequestMethod::VALUE,
+            resource(&request.uri),
+            &context,
+        );
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.subscribe(request, context),
+            |_, _, _| false,
+        )
+    }
+
+    #[allow(deprecated)]
+    fn unsubscribe(
+        &self,
+        request: UnsubscribeRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<(), ErrorData>> + MaybeSendFuture + '_ {
+        let (operation, span) = self.0.request(
+            UnsubscribeRequestMethod::VALUE,
+            resource(&request.uri),
+            &context,
+        );
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.unsubscribe(request, context),
+            |_, _, _| false,
+        )
+    }
+
+    fn call_tool(
+        &self,
+        request: CallToolRequestParams,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CallToolResponse, ErrorData>> + MaybeSendFuture + '_ {
+        let target = Target {
+            tool: Some(request.name.to_string()),
+            ..Target::default()
+        };
+        let (operation, span) = self
+            .0
+            .request(CallToolRequestMethod::VALUE, target, &context);
+        if self.0.config.payloads {
+            span.record(
+                "gen_ai.tool.call.arguments",
+                payload(&request.arguments).as_str(),
+            );
+        }
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.call_tool(request, context),
+            |response, span, payloads| match response {
+                CallToolResponse::Complete(r) => tool_failed(r, span, payloads),
+                _ => false,
+            },
+        )
+    }
+
+    request!(
+        list_tools,
+        ListToolsRequestMethod,
+        Option<PaginatedRequestParams>,
+        ListToolsResult
+    );
+
+    fn get_tool(&self, name: &str) -> Option<Tool> {
+        self.0.inner.get_tool(name)
+    }
+
+    fn on_custom_request(
+        &self,
+        request: CustomRequest,
+        context: RequestContext<RoleServer>,
+    ) -> impl Future<Output = Result<CustomResult, ErrorData>> + MaybeSendFuture + '_ {
+        let (operation, span) = self.0.request(&request.method, Target::default(), &context);
+        self.0.observe(
+            operation,
+            span,
+            self.0.inner.on_custom_request(request, context),
+            |_, _, _| false,
+        )
+    }
+
+    fn on_cancelled(
+        &self,
+        notification: CancelledNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        let observed = self
+            .0
+            .notification(CancelledNotificationMethod::VALUE, &context);
+        self.0
+            .observe_notification(observed, self.0.inner.on_cancelled(notification, context))
+    }
+
+    fn on_progress(
+        &self,
+        notification: ProgressNotificationParam,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        let observed = self
+            .0
+            .notification(ProgressNotificationMethod::VALUE, &context);
+        self.0
+            .observe_notification(observed, self.0.inner.on_progress(notification, context))
+    }
+
+    fn on_initialized(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        let observed = self
+            .0
+            .notification(InitializedNotificationMethod::VALUE, &context);
+        self.0
+            .observe_notification(observed, self.0.inner.on_initialized(context))
+    }
+
+    fn on_roots_list_changed(
+        &self,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        let observed = self
+            .0
+            .notification(RootsListChangedNotificationMethod::VALUE, &context);
+        self.0
+            .observe_notification(observed, self.0.inner.on_roots_list_changed(context))
+    }
+
+    fn on_custom_notification(
+        &self,
+        notification: CustomNotification,
+        context: NotificationContext<RoleServer>,
+    ) -> impl Future<Output = ()> + MaybeSendFuture + '_ {
+        let observed = self.0.notification(&notification.method, &context);
+        self.0.observe_notification(
+            observed,
+            self.0.inner.on_custom_notification(notification, context),
+        )
+    }
+
+    fn get_info(&self) -> ServerConfig {
+        self.0.inner.get_info()
+    }
+
+    request!(get_task, GetTaskMethod, GetTaskParams, GetTaskResult);
+    request!(update_task, UpdateTaskMethod, UpdateTaskParams, ());
+    request!(cancel_task, CancelTaskMethod, CancelTaskParams, ());
 }
 
 impl<S> Drop for Instrumented<S> {

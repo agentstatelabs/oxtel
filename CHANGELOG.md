@@ -6,6 +6,15 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`oxtel_rmcp::InstrumentedHandler`, for MCP servers over streamable HTTP.** rmcp 3's `StreamableHttpService` takes only a `ServerHandler`, and `Instrumented` is a service, so oxtel-rmcp 0.4.0 couldn't instrument a server served over HTTP. `InstrumentedHandler` instruments a `ServerHandler` as `Instrumented` does a service, and is one itself: `StreamableHttpService::new(|| Ok(InstrumentedHandler::new(server)), ...)`.
+  - Over HTTP, spans record `network.transport` `tcp`, `network.protocol.name` and `version`, and, for a session, `mcp.session.id`. Tests check this through rmcp's own HTTP server and client.
+  - It sees a request once rmcp hands it to one of the handler's methods. So, unlike `Instrumented`, it doesn't record requests rmcp turns away itself, such as one for an unsupported protocol version. A `subscriptions/listen` request isn't recorded either.
+
+### Fixed
+- **An MCP server span without the caller's trace now starts a trace of its own.** Before, it became a child of whatever span the transport ran it in. rmcp runs a whole stdio session, or an HTTP request, inside a span of its own, at `info`. So every request that didn't carry a trace of the client's, such as `initialize`, `tools/list` and tool calls from clients that don't propagate, joined one long trace.
+- **`mcp.protocol.version` is read from the request too**, as protocol 2026-07-28 sends it, when there was no `initialize` to take it from.
+
 ## [0.4.0] - 2026-11-26
 
 Metrics for every backend, and three new crates. OTLP can now carry deltas instead of totals and base-2 exponential histograms, as some backends prefer, and views change a metric's name, buckets or attributes without touching the code that records it. OTLP can also go over gRPC, with the new `grpc` feature, use TLS certificate files, or be written as OTLP/JSON lines to standard output or a file. The new crates instrument reqwest clients (`oxtel-reqwest`), calls to generative AI models (`oxtel-genai`) and the tokio runtime (`oxtel-tokio`).

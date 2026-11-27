@@ -139,6 +139,25 @@ async fn tool_calls_become_server_spans_that_continue_the_callers_trace() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn requests_without_the_callers_trace_start_their_own() {
+    let h = harness();
+    let (client, server) = connect(Instrumented::new(Tools).with_transport("pipe")).await;
+    client.call_tool(call("echo")).await.unwrap();
+    client.cancel().await.unwrap();
+    server.await.unwrap();
+
+    let spans = h.spans.finished_spans();
+    // rmcp runs the whole session in a span of its own; requests that carry
+    // no trace of the caller's mustn't all join it.
+    let session = named(&spans, "serve_inner");
+    for name in ["initialize", "tools/call echo"] {
+        let span = named(&spans, name);
+        assert_eq!(span.parent_span_id, None, "{name}");
+        assert_ne!(span.context.trace_id, session.context.trace_id, "{name}");
+    }
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn failures_follow_the_conventions() {
     let h = harness();
     let (client, server) = connect(Instrumented::new(Tools)).await;
