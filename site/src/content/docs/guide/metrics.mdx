@@ -1,0 +1,66 @@
+---
+title: Metrics for your backend
+description: Totals or deltas, explicit or exponential histograms, and views that change one metric's buckets, attributes or name without touching the code that records it.
+---
+
+import Example from '../../../components/Example.astro';
+
+oxtel records metrics through the `metrics` crate's macros, such as `metrics::counter!`, and sends them as OpenTelemetry metrics. By default, they're in the shape most backends expect: running totals, with histograms in explicit buckets. Two settings change that shape for backends that want something else, and views change single metrics.
+
+## Totals or deltas
+
+A counter can be sent as its total so far, which OpenTelemetry calls *cumulative*, or as the change since the last export, a *delta*. Most backends want totals; a few prefer deltas, and their documentation says so.
+
+`OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta` makes OTLP's counters and histograms deltas:
+
+- **Each export says what changed since the one before,** starting from that export's time.
+- **A series with no new measurements is left out** of the next export, rather than sent as zero.
+- **A histogram's min and max are the interval's,** and only exemplars from the interval are sent.
+- **Gauges are unchanged:** they report a current value, which has no temporality.
+- **It's per exporter.** The Prometheus endpoint, and any other exporter, keeps its totals.
+
+`lowmemory` is accepted too. For oxtel it means the same as `delta`, since the `metrics` crate has no instruments for which they differ.
+
+## Exponential histograms
+
+A histogram in explicit buckets counts how many values fell between bounds chosen in advance: for durations, oxtel uses the ones the OpenTelemetry conventions advise, from 0.005 to 10 seconds. It's only as precise as those bounds. A base-2 exponential histogram chooses its own: buckets that grow by a constant factor, as fine as the recorded range allows. It describes values from microseconds to minutes with no bounds to choose.
+
+`OTEL_EXPORTER_OTLP_METRICS_DEFAULT_HISTOGRAM_AGGREGATION=base2_exponential_bucket_histogram` makes OTLP's histograms exponential:
+
+- **Up to 160 buckets** for positive values, and as many for negative ones, at the finest scale (up to 20) that holds the values recorded. As the range grows, the scale coarsens.
+- **Zeros are counted apart.**
+- **It works with deltas,** exactly, even across a change of scale.
+- **Prometheus scrapes are unchanged.** Exponential histograms are kept alongside the explicit buckets only when an exporter asks for them.
+
+## In a configuration file
+
+In a [declarative configuration file](https://github.com/agentstatelabs/oxtel#settings), each OTLP exporter has both settings. This is from oxtel's example file:
+
+<Example file="examples/otel-config.yaml" region="delta" />
+
+Each exporter keeps its own: here the Prometheus endpoint, the reader after this one, keeps its totals and explicit buckets.
+
+## Views
+
+A view changes how one metric, or a set of them, is recorded and sent, without touching the code that records it:
+
+- **Rename it,** or change its description.
+- **Drop it** altogether.
+- **Change its histogram:** different bucket bounds, with or without min and max, or an exponential histogram for every exporter.
+- **Keep fewer attributes:** only some, or all but some. Each combination of attribute values is a series of its own, so dropping an attribute with many values, such as a statement's summary, can make a metric far cheaper to store.
+- **Set its series limit,** in place of the default of 2,000.
+
+A view selects instruments by name, with `*` and `?` as wildcards, by type, by unit, or by the meter that made them. When several views select an instrument, the first one applies. These are from oxtel's example file:
+
+<Example file="examples/otel-config.yaml" region="views" />
+
+In code, with `oxtel::builder()`, add views to the metrics pipeline with `.with_metrics(|meters| meters.with_view(view))`. The [`View` documentation](https://docs.rs/oxtel-sdk/latest/oxtel_sdk/metrics/struct.View.html) lists what a view can select and change.
+
+Two things a view can say don't apply to oxtel, and each is a warning at startup:
+
+- **Observable instrument types select nothing,** since the `metrics` crate has no observable instruments.
+- **A `sum` or `last_value` aggregation leaves an instrument as it was.**
+
+## How it's checked
+
+CI checks oxtel's example configuration file against the published schema, and checks that oxtel reads it without warnings. Its conformance tests send deltas and exponential histograms to a real OpenTelemetry Collector, over HTTP and gRPC, and check what arrives.

@@ -51,17 +51,46 @@ tracer_provider:
 meter_provider:
   exemplar_filter: trace_based
   readers:
+    # ANCHOR: delta
     - periodic:
         interval: 60000
         exporter:
           otlp_http:
             endpoint: http://localhost:4318/v1/metrics
             encoding: json
+            # Deltas and exponential histograms, for this exporter only:
+            # the Prometheus endpoint below keeps its totals and buckets.
+            temporality_preference: delta
+            default_histogram_aggregation: base2_exponential_bucket_histogram
+    # ANCHOR_END: delta
     - pull:
         exporter:
           prometheus/development:
             host: localhost
             port: 9464
+  # ANCHOR: views
+  views:
+    # Request durations in fewer, wider buckets.
+    - selector:
+        instrument_name: http.server.request.duration
+      stream:
+        aggregation:
+          explicit_bucket_histogram:
+            boundaries: [0.01, 0.05, 0.1, 0.5, 1, 5]
+    # Statement durations without the statement's summary, so there's one
+    # series per database instead of one per statement.
+    - selector:
+        instrument_name: db.client.operation.duration
+      stream:
+        attribute_keys:
+          excluded: [db.query.summary]
+    # Nothing from the cache's instruments.
+    - selector:
+        instrument_name: cache.*
+      stream:
+        aggregation:
+          drop:
+  # ANCHOR_END: views
 
 logger_provider:
   processors:
