@@ -51,7 +51,22 @@ With `oxtel-tower` and its `axum` feature, one layer gives every request a span 
 
 ## An MCP server
 
-Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapper. Each tool call gets a span named `tools/call {tool}`, continuing the client's trace if it sent one. Log lines go to standard error by default, which keeps them out of a stdio server's protocol stream; don't set `OXTEL_LOG_OUTPUT=stdout` for one.
+Wrap the server with `oxtel_rmcp::Instrumented::new(server)` and serve the wrapper. Each request gets a span named for what it asks, such as `tools/call add`, continuing the client's trace if it sent one:
+
+<Example file="examples/mcp-stdio.rs" region="serve" />
+
+- Log lines go to standard error by default, which keeps them out of a stdio server's protocol stream. Don't set `OXTEL_LOG_OUTPUT=stdout` for one, or turn on a console exporter.
+- `RUST_LOG=info,rmcp=warn` keeps rmcp's own lines, and its span around the whole session, out of the way.
+
+[An MCP server over stdio](/scenarios/mcp-stdio/) has the whole program.
+
+## Calling another service
+
+Wrap a reqwest client with `oxtel_reqwest::client`, and each request gets a client span and sends the trace along in its headers. A service with oxtel-tower's `HttpServerLayer` picks it up, so one trace covers both:
+
+<Example file="examples/two-services.rs" region="serve" />
+
+[Two services](/scenarios/two-services/) has the whole program.
 
 ## Turning things off
 

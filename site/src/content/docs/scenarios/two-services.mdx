@@ -1,0 +1,83 @@
+---
+title: Two services
+description: One service calling another over HTTP, with one trace across both, from the caller's request through its call to the other service's request.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+Two HTTP services, one calling the other: a shop that asks an inventory service how many of an item are in stock before it takes an order. One trace covers the whole order:
+
+- the shop's request span, `GET /orders/{item}`;
+- inside it, a client span for its call to the inventory, `GET`, which sends the trace along in a `traceparent` header;
+- the inventory's request span, `GET /stock/{item}`, which picks the trace up from that header.
+
+A backend shows the three as one tree, and every log line from either service carries the same trace id.
+
+Here both services run in one program, which sends the shop one order and stops, so one command shows both sides. Each of yours is a program of its own. The trace still crosses from one to the other, because it travels in the request's headers.
+
+## The code
+
+<Example file="examples/two-services.rs" />
+
+## Dependencies
+
+<Example file="examples/two-services.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/two-services.rs" doc="bash" />
+
+## What it prints
+
+The log lines of both services:
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/two-services.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/two-services.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+- Every line has the same trace id, from the inventory's as much as the shop's.
+- Each service writes a `request` line when it finishes a request, with the status and how long it took in seconds.
+- The inventory's lines come first: the shop takes the order only after the inventory answers.
+
+With `OTEL_TRACES_EXPORTER=console`, as in the second command above, the spans are printed on standard output as they end, so the innermost comes first:
+
+<Example file="examples/output/two-services.spans" title="Standard output" wrap />
+
+- The client span's `parent_id` is the shop's span id, and the inventory's `parent_id` is the client span's. That's the chain a backend draws as a tree.
+- The client span is named for the method alone, `GET`, since a client doesn't know the server's routes. The URL is in `url.full`, without its query string, which may hold secrets.
+
+CI runs the example both ways and checks it still prints these lines.
+
+## What's recorded
+
+The names follow the OpenTelemetry conventions for HTTP.
+
+| | |
+|---|---|
+| Server span name | The method and route, such as `GET /stock/{item}`, from oxtel-tower's `HttpServerLayer` |
+| Client span name | The method, such as `GET`, from oxtel-reqwest |
+| `http.request.method`, `http.response.status_code` | On both |
+| `http.route`, `url.path`, `url.scheme` | On the server span |
+| `url.full`, `server.address`, `server.port` | On the client span; the server span has the address and port it was reached at |
+| `error.type` | A 5xx on the server span; a 4xx or 5xx on the client span, or why there was no response, such as `timeout` or `connect` |
+| `http.server.request.duration` | A histogram of each request's duration in seconds, by method, route and status |
+| `http.server.active_requests` | The requests in progress |
+| `http.client.request.duration` | A histogram of each call's duration in seconds, by method, server and status |
+
+## For production
+
+- **Name each service.** Set `OTEL_SERVICE_NAME` for each, such as `shop` and `inventory`: that's how a backend tells their spans apart in the trace.
+- **Send traces only to your own services.** A `traceparent` header tells the receiver your trace id. For calls that leave your systems, add `oxtel_reqwest::HttpClientMiddleware::new().with_propagation(false)` to the client instead of using `oxtel_reqwest::client`.
+- **Decide where traces start.** A service that requests reach from outside continues any trace a caller sends. `HttpServerLayer::new().with_propagation(false)` starts a new trace for each request instead.
+- **Keep the headers through proxies.** A proxy or gateway between the services must pass `traceparent` and `tracestate` on, or the trace splits in two.
+- **Make one client, after `oxtel::init()`,** and share it, as the shop shares it through axum's state: a reqwest client keeps its connections open for the next request.
+- **Other clients:** a hyper or tower client gets the same span and metric from oxtel-tower's `HttpClientLayer`.
+- **Stop gracefully,** as in [a web service](/scenarios/web-service/), so the last requests' telemetry is sent.
