@@ -1,0 +1,44 @@
+---
+title: Grafana, Tempo and Loki
+description: Traces in Tempo, logs in Loki and metrics in Prometheus, all shown in Grafana, linked so a log line leads to its trace.
+---
+
+import Example from '../../../components/Example.astro';
+
+Grafana shows telemetry that other programs keep: here, traces in Tempo, logs in Loki and metrics in Prometheus. Each of the three takes OTLP itself, so oxtel sends each kind of telemetry straight to the one that keeps it, with nothing in between. Grafana then links them: from a log line to its trace, and from a trace to its log lines.
+
+## Run it
+
+The files are in the repository's `examples/backends/grafana/`; run `docker compose up -d` there.
+
+<Example file="examples/backends/grafana/compose.yaml" />
+
+Tempo needs a few lines of configuration, to take OTLP:
+
+<Example file="examples/backends/grafana/tempo.yaml" />
+
+Grafana starts with the three as its data sources, linked by trace id:
+
+<Example file="examples/backends/grafana/datasources.yaml" />
+
+## Send to it
+
+Set these where your program runs, then start it:
+
+<Example file="examples/backends/grafana/settings.sh" />
+
+Each kind of telemetry has its own endpoint, used exactly as given, so each needs its full path. Open http://localhost:3000 and go to Explore:
+
+- **Logs:** choose Loki and query `{service_name="worker"}`. Loki turns `service.name` into the label `service_name`, and keeps each line's trace id beside it, so a line written inside a span links to its trace.
+- **Traces:** choose Tempo and search for the service, or query `{resource.service.name="worker"}`.
+- **Metrics:** choose Prometheus and query `jobs_processed_total{job="worker"}`. [Prometheus](/backends/prometheus/#the-names-in-prometheus) explains how the names change.
+
+## In production
+
+- **A Collector in front** is common: programs send everything to one address, and the [Collector](/backends/collector/) sends each kind on, with batching, retries, and the credentials in one place. Set `OTEL_EXPORTER_OTLP_ENDPOINT` to the Collector, instead of the three endpoints.
+- **Storage:** this Tempo keeps traces on the container's disk, and Loki and Prometheus their defaults, all lost with the containers. Grafana's documentation covers running each to keep data.
+- **Signing in:** this Grafana lets anyone in as an administrator. Remove the `GF_AUTH_` settings anywhere but your own machine.
+
+## How it's checked
+
+On every change, CI starts this stack, runs [the background worker](/scenarios/worker/) with these settings, and asks Tempo for its traces, Loki for its failed job's log line and Prometheus for its `jobs.processed` counter. It also asks Grafana whether each data source works. `check.sh`, beside the compose file, has the queries.

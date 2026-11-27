@@ -1,0 +1,11 @@
+# The OpenTelemetry Collector, taking OTLP on 4318 (HTTP) and 4317 (gRPC)
+# and doing with it what collector.yaml says.
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.161.0
+    volumes:
+      - ./collector.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4318:4318"
+      - "4317:4317"
+      - "13133:13133"

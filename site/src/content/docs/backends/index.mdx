@@ -1,0 +1,28 @@
+---
+title: Backends
+description: Where to send oxtel's telemetry, with a stack to run on your machine for each, checked in CI on every change.
+---
+
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+A backend keeps telemetry and lets you search it. oxtel speaks OTLP, which almost every backend takes, so sending to one is a matter of settings, not code. Each page here has a stack to run with `docker compose`, the settings that send to it, and where to look once telemetry arrives.
+
+| Backend | What it keeps | How oxtel reaches it |
+|---|---|---|
+| [Elastic](/backends/elastic/) | Traces, metrics and logs | OTLP to APM Server, or log lines for a shipper |
+| [Grafana, Tempo and Loki](/backends/grafana/) | Traces in Tempo, logs in Loki, metrics in Prometheus | OTLP to each |
+| [Hosted backends](/backends/hosted/) | Whatever the service keeps | OTLP, with a key in a header |
+| [Jaeger](/backends/jaeger/) | Traces | OTLP |
+| [The OpenTelemetry Collector](/backends/collector/) | Nothing: it sends telemetry on, to backends of your choice | OTLP |
+| [Prometheus](/backends/prometheus/) | Metrics | Scraping `/metrics`, or OTLP |
+
+Every stack here runs in CI on every change: CI starts it, runs [the background worker](/scenarios/worker/) with the page's settings, and checks the backend has the worker's telemetry, with the same files the pages show. They're in the repository's [`examples/backends/`](https://github.com/agentstatelabs/oxtel/tree/main/examples/backends), with `run.sh` to run the checks yourself.
+
+<CardGrid>
+	<LinkCard title="Elastic" description="Traces, metrics and logs through APM Server's OTLP endpoint, or log lines in the Elastic Common Schema." href="/backends/elastic/" />
+	<LinkCard title="Grafana, Tempo and Loki" description="Traces in Tempo, logs in Loki and metrics in Prometheus, linked in Grafana." href="/backends/grafana/" />
+	<LinkCard title="Hosted backends" description="An endpoint and a key, and what to check when nothing arrives." href="/backends/hosted/" />
+	<LinkCard title="Jaeger" description="Traces, from one container, with one setting." href="/backends/jaeger/" />
+	<LinkCard title="The OpenTelemetry Collector" description="One address for your programs, sending on to any backend." href="/backends/collector/" />
+	<LinkCard title="Prometheus" description="Metrics scraped from /metrics or pushed over OTLP, and how their names change." href="/backends/prometheus/" />
+</CardGrid>

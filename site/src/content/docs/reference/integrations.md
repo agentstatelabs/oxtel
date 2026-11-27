@@ -48,6 +48,8 @@ oxtel speaks the open protocols rather than any backend's own, so it works with 
 | A terminal, while you develop | The `console` exporters, and local log lines as text | Supported |
 | Zipkin's or Jaeger's own protocols | Not built in: send OTLP, which Jaeger accepts, or have a Collector convert it | Not planned |
 
+[Backends](/backends/) has a stack to run and the settings for the OpenTelemetry Collector, Elastic, Grafana with Tempo and Loki, Jaeger and Prometheus. CI runs each on every change and checks the telemetry arrives.
+
 ## Where your program runs
 
 What oxtel detects about where it runs, and records with everything it sends.

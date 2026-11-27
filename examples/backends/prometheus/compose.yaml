@@ -1,0 +1,15 @@
+# Prometheus, on http://localhost:9090. It takes metrics pushed over OTLP,
+# and scrapes the targets prometheus.yml names.
+services:
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-otlp-receiver
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    # Lets the scrape reach a program on your machine, on Linux as well.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

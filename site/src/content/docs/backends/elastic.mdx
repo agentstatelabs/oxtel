@@ -1,0 +1,46 @@
+---
+title: Elastic
+description: Traces, metrics and logs in Elasticsearch through APM Server's OTLP endpoint, or log lines in the Elastic Common Schema for a log shipper.
+---
+
+import Example from '../../../components/Example.astro';
+
+There are two ways into Elasticsearch, and they combine:
+
+- **Over OTLP:** oxtel sends traces, metrics and logs to Elastic's APM Server, which takes OTLP itself and writes them to Elasticsearch. Kibana shows them.
+- **As log lines:** oxtel writes each log line as JSON in the Elastic Common Schema, and Elastic Agent or Filebeat ships them, as they would any other program's.
+
+## Run it
+
+Elasticsearch, APM Server and Kibana. The file is in the repository's `examples/backends/elastic/`; run `docker compose up -d` there. Elasticsearch needs about 2 GiB of Docker's memory, and Kibana takes a minute to start.
+
+<Example file="examples/backends/elastic/compose.yaml" />
+
+## Send to it over OTLP
+
+Set these where your program runs, then start it:
+
+<Example file="examples/backends/elastic/settings.sh" />
+
+Kibana is on http://localhost:5601. In Elasticsearch, each kind of telemetry has its own data stream: the spans in `traces-apm-default`, and for a service named `worker`, its metrics in `metrics-apm.app.worker-default` and its log records in `logs-apm.app.worker-default`.
+
+For a deployment that needs credentials, such as one in Elastic Cloud, set the endpoint it gives you, and the authorization header for its API key or secret token:
+
+```bash
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://<your deployment's APM endpoint>
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=ApiKey <key>"
+# or, with a secret token:
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <secret token>"
+```
+
+## Or ship log lines
+
+```bash
+export OXTEL_LOG_FORMAT=ecs
+```
+
+Each line is then a JSON object laid out as the ecs-logging specification says: `@timestamp`, `log.level`, `message` and `ecs.version`, then the logger, `trace.id`, `span.id` and the service, then the span's and the event's own fields. Elastic Agent and Filebeat read them without any mapping. It needs no OTLP at all. Lines go to standard error, unless `OXTEL_LOG_OUTPUT=stdout`: point the shipper at whichever your platform collects.
+
+## How it's checked
+
+On every change, CI starts this stack, runs [the background worker](/scenarios/worker/) with these settings, and asks Elasticsearch for its four job transactions, its failed job's log record and its `jobs.processed` counter, then checks Kibana is available. `check.sh`, beside the compose file, has the queries. oxtel's tests check its ECS lines against the ecs-logging layout.

@@ -83,6 +83,18 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Backends',
+					items: [
+						{ label: 'Overview', slug: 'backends' },
+						{ label: 'Elastic', slug: 'backends/elastic' },
+						{ label: 'Grafana, Tempo and Loki', slug: 'backends/grafana' },
+						{ label: 'Hosted backends', slug: 'backends/hosted' },
+						{ label: 'Jaeger', slug: 'backends/jaeger' },
+						{ label: 'OpenTelemetry Collector', slug: 'backends/collector' },
+						{ label: 'Prometheus', slug: 'backends/prometheus' },
+					],
+				},
+				{
 					label: 'Reference',
 					items: [
 						{ label: 'What works with what', slug: 'reference/integrations' },
