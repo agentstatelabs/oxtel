@@ -124,7 +124,7 @@ And the rest:
 
 oxtel follows the OpenTelemetry specification's variables and defaults with one deliberate exception: the specification sends to `localhost:4318` even when nothing is set, and oxtel sends nothing until an endpoint is set. Naming the exporter, as in `OTEL_TRACES_EXPORTER=otlp`, still gets the specification's default.
 
-A program can also make these choices in code, with `oxtel::builder()`; its documentation says which ones the environment overrides. [`examples/quickstart.rs`](examples/quickstart.rs) uses the builder, and [`examples/manual.rs`](examples/manual.rs) assembles the pipelines by hand, as a distribution might.
+[Every setting](https://agentstatelabs.github.io/oxtel/reference/settings/), with its default, is on the site. A program can also make these choices in code, with `oxtel::builder()`; its documentation says which ones the environment overrides. [`examples/quickstart.rs`](examples/quickstart.rs) uses the builder, and [`examples/manual.rs`](examples/manual.rs) assembles the pipelines by hand, as a distribution might.
 
 ## What works today
 

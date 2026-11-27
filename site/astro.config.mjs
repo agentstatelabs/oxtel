@@ -83,9 +83,15 @@ export default defineConfig({
 					],
 				},
 				{
+					label: 'Reference',
+					items: [
+						{ label: 'What works with what', slug: 'reference/integrations' },
+						{ label: 'Every setting', slug: 'reference/settings' },
+					],
+				},
+				{
 					label: 'More',
 					items: [
-						{ label: 'Every setting', link: 'https://github.com/agentstatelabs/oxtel#settings' },
 						{ label: 'API documentation', link: 'https://docs.rs/oxtel' },
 						{ label: 'Design and roadmap', link: 'https://github.com/agentstatelabs/oxtel/blob/main/DESIGN.md' },
 						{ label: 'Changelog', link: 'https://github.com/agentstatelabs/oxtel/blob/main/CHANGELOG.md' },
