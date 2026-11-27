@@ -6,6 +6,9 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **`oxtel_sdk::testing`, for testing what's recorded under which names.** `recorded_names(&spans, &metrics)` turns what a pipeline recorded into sorted text of its names: each span's scope, kind and name with its attribute keys, and each metric's instrument, name and unit with its label keys. Values are left out, so the text changes only when a name does. `assert_recorded_names` keeps that text in a file and fails when it changes, or rewrites the file when asked. oxtel's own instrumentation crates now keep what their tests record this way, and the site's list of every span and metric is generated from those files.
+
 ## [0.4.1] - 2026-11-27
 
 MCP servers over streamable HTTP can be instrumented, with the new `oxtel_rmcp::InstrumentedHandler`, and oxtel-rmcp's spans are fixed in two ways: a request without the client's trace starts a trace of its own, and `mcp.protocol.version` is the version the session agreed on. Coming from 0.4.0, nothing else changes.

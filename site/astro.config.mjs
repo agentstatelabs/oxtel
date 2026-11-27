@@ -87,6 +87,7 @@ export default defineConfig({
 					items: [
 						{ label: 'What works with what', slug: 'reference/integrations' },
 						{ label: 'Every setting', slug: 'reference/settings' },
+						{ label: 'Every span and metric', slug: 'reference/telemetry' },
 					],
 				},
 				{

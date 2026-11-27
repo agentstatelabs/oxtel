@@ -1,0 +1,65 @@
+span [oxtel_sql] client BEGIN
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client COMMIT
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client CREATE TABLE events
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client INSERT events
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client ROLLBACK
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+span [oxtel_sql] client SELECT events
+  db.namespace
+  db.query.summary
+  db.query.text
+  db.response.returned_rows
+  db.system.name
+  server.address
+  server.port
+metric gauge db.client.connection.count
+  db.client.connection.pool.name
+  db.client.connection.state
+metric gauge db.client.connection.max
+  db.client.connection.pool.name
+metric gauge db.client.connection.pending_requests
+  db.client.connection.pool.name
+metric histogram db.client.connection.use_time s
+  db.client.connection.pool.name
+metric histogram db.client.connection.wait_time s
+  db.client.connection.pool.name
+metric histogram db.client.operation.duration s
+  db.namespace
+  db.query.summary
+  db.system.name
+  server.address
+  server.port

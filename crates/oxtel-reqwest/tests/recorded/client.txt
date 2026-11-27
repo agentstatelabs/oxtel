@@ -1,0 +1,15 @@
+span [oxtel_tower] client GET
+  error.type
+  http.request.method
+  http.response.status_code
+  network.protocol.version
+  server.address
+  server.port
+  url.full
+metric histogram http.client.request.duration s
+  error.type
+  http.request.method
+  http.response.status_code
+  server.address
+  server.port
+  url.scheme

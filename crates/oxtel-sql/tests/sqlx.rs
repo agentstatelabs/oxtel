@@ -82,8 +82,20 @@ fn point(meters: &MeterProvider, name: &str, labels: &[(&str, &str)]) -> Option<
         .map(|p| p.value)
 }
 
-/// `otel.*` fields steer the span itself; they aren't attributes.
-fn check_names(h: &Harness) {
+/// `otel.*` fields steer the span itself; they aren't attributes. The names
+/// recorded are kept in tests/recorded/`recorded`.txt, for the site's
+/// reference: OXTEL_REWRITE_RECORDED=1 rewrites the file when a change is
+/// meant.
+fn check_names(h: &Harness, recorded: &str) {
+    oxtel_sdk::testing::assert_recorded_names(
+        format!(
+            "{}/tests/recorded/{recorded}.txt",
+            env!("CARGO_MANIFEST_DIR")
+        ),
+        &h.spans.finished_spans(),
+        &h.meters.collect(),
+        std::env::var_os("OXTEL_REWRITE_RECORDED").is_some(),
+    );
     for span in h.spans.finished_spans() {
         for kv in &span.attributes {
             assert!(
@@ -214,7 +226,7 @@ macro_rules! against {
                     panic!("no durations for SELECT users")
                 };
                 assert_eq!(durations.count(), 2);
-                check_names(&h);
+                check_names(&h, concat!(stringify!($module), "-queries"));
             }
 
             #[tokio::test]
@@ -254,7 +266,7 @@ macro_rules! against {
                     )
                     .is_some()
                 );
-                check_names(&h);
+                check_names(&h, concat!(stringify!($module), "-failure"));
             }
 
             #[tokio::test]
@@ -308,7 +320,7 @@ macro_rules! against {
                         "SELECT events"
                     ]
                 );
-                check_names(&h);
+                check_names(&h, concat!(stringify!($module), "-transactions"));
             }
 
             #[tokio::test]
@@ -347,7 +359,7 @@ macro_rules! against {
                 };
                 assert_eq!(histogram_count("db.client.connection.wait_time"), 2);
                 assert_eq!(histogram_count("db.client.connection.use_time"), 2);
-                check_names(&h);
+                check_names(&h, concat!(stringify!($module), "-pool"));
             }
         }
     };

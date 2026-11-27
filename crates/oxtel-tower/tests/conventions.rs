@@ -78,6 +78,18 @@ async fn spans_and_metrics_use_only_defined_names() {
 
     let families = meters.collect();
     assert!(families.len() >= 3);
+    // The names recorded, kept in tests/recorded/ for the site's reference:
+    // OXTEL_REWRITE_RECORDED=1 rewrites the file when a change is meant.
+    oxtel_sdk::testing::assert_recorded_names(
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/recorded/conventions.txt"
+        ),
+        &spans,
+        &families,
+        std::env::var_os("OXTEL_REWRITE_RECORDED").is_some(),
+    );
+
     for family in &families {
         let definition = metric::by_name(&family.name)
             .unwrap_or_else(|| panic!("{} isn't a defined metric", family.name));
