@@ -148,7 +148,14 @@ fn metric_obj(o: &mut Obj, m: &metrics::Metric) {
                 i64::from(h.aggregation_temporality),
             );
         }),
-        // oxtel doesn't produce the other kinds.
+        Some(Data::ExponentialHistogram(h)) => o.obj("exponentialHistogram", |o| {
+            o.list("dataPoints", &h.data_points, exponential_point_obj);
+            o.int(
+                "aggregationTemporality",
+                i64::from(h.aggregation_temporality),
+            );
+        }),
+        // oxtel doesn't produce summaries.
         _ => {}
     }
     o.list("metadata", &m.metadata, key_value_obj);
@@ -189,6 +196,37 @@ fn histogram_point_obj(o: &mut Obj, p: &metrics::HistogramDataPoint) {
     }
     if let Some(max) = p.max {
         o.double("max", max);
+    }
+}
+
+fn exponential_point_obj(o: &mut Obj, p: &metrics::ExponentialHistogramDataPoint) {
+    let buckets = |o: &mut Obj, b: &metrics::exponential_histogram_data_point::Buckets| {
+        o.int("offset", i64::from(b.offset));
+        o.raw_list("bucketCounts", &b.bucket_counts, |out, n| {
+            let _ = write!(out, "\"{n}\"");
+        });
+    };
+    o.list("attributes", &p.attributes, key_value_obj);
+    o.u64("startTimeUnixNano", p.start_time_unix_nano);
+    o.u64("timeUnixNano", p.time_unix_nano);
+    o.u64("count", p.count);
+    if let Some(sum) = p.sum {
+        o.double("sum", sum);
+    }
+    o.int("scale", i64::from(p.scale));
+    o.u64("zeroCount", p.zero_count);
+    o.opt_obj("positive", p.positive.as_ref(), buckets);
+    o.opt_obj("negative", p.negative.as_ref(), buckets);
+    o.u32("flags", p.flags);
+    o.list("exemplars", &p.exemplars, exemplar_obj);
+    if let Some(min) = p.min {
+        o.double("min", min);
+    }
+    if let Some(max) = p.max {
+        o.double("max", max);
+    }
+    if p.zero_threshold != 0.0 {
+        o.double("zeroThreshold", p.zero_threshold);
     }
 }
 
