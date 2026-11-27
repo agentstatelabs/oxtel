@@ -6,6 +6,10 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-27
+
+MCP servers over streamable HTTP can be instrumented, with the new `oxtel_rmcp::InstrumentedHandler`, and oxtel-rmcp's spans are fixed in two ways: a request without the client's trace starts a trace of its own, and `mcp.protocol.version` is the version the session agreed on. Coming from 0.4.0, nothing else changes.
+
 ### Added
 - **`oxtel_rmcp::InstrumentedHandler`, for MCP servers over streamable HTTP.** rmcp 3's `StreamableHttpService` takes only a `ServerHandler`, and `Instrumented` is a service, so oxtel-rmcp 0.4.0 couldn't instrument a server served over HTTP. `InstrumentedHandler` instruments a `ServerHandler` as `Instrumented` does a service, and is one itself: `StreamableHttpService::new(|| Ok(InstrumentedHandler::new(server)), ...)`.
   - Over HTTP, spans record `network.transport` `tcp`, `network.protocol.name` and `version`, and, for a session, `mcp.session.id`. Tests check this through rmcp's own HTTP server and client.
@@ -291,7 +295,8 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/agentstatelabs/oxtel/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/agentstatelabs/oxtel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/agentstatelabs/oxtel/compare/v0.2.0...v0.3.0
