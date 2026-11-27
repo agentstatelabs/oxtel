@@ -4,7 +4,7 @@ OpenTelemetry-compatible telemetry for Rust, native to [`tracing`](https://docs.
 
 Structured logs with one line of setup, and OpenTelemetry traces, metrics and logs when you want them, without changing your code. Rust code already records spans, logs and metrics with `tracing` and `metrics`; oxtel turns that into JSON or text log lines, OTLP for collectors and backends, and Prometheus scrapes. There's no second instrumentation API to learn, and no bridge between two.
 
-**[The documentation site](https://agentstatelabs.github.io/oxtel/)** has the rest: scenarios to copy, from a command-line tool to an MCP server; a guide; and every setting, span and metric.
+**[The documentation site](https://oxtel.agentstatelabs.com/)** has the rest: scenarios to copy, from a command-line tool to an MCP server; a guide; and every setting, span and metric.
 
 > **Status: 0.4, early.** Traces, logs and metrics work end to end, and are tested against a real OpenTelemetry Collector. The API will change before 1.0; the [roadmap](DESIGN.md#6-plan) says what comes next.
 
@@ -52,7 +52,7 @@ let app = Router::new()
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 OTEL_SERVICE_NAME=shop cargo run
 ```
 
-Nothing is sent anywhere until an endpoint is set. [Get started](https://agentstatelabs.github.io/oxtel/start/) goes through each step, with programs you can run.
+Nothing is sent anywhere until an endpoint is set. [Get started](https://oxtel.agentstatelabs.com/start/) goes through each step, with programs you can run.
 
 ## What it works with
 
@@ -60,7 +60,7 @@ Nothing is sent anywhere until an endpoint is set. [Get started](https://agentst
 - **Destinations:** anything that receives OTLP over HTTP or gRPC, such as the OpenTelemetry Collector, Jaeger or a hosted backend; Prometheus scrapes; and JSON log lines for log pipelines, Elastic's included.
 - **Programs of every kind,** async or not: services, background workers, command-line tools, and library crates that use `tracing` and `metrics` alone.
 
-[What works with what](https://agentstatelabs.github.io/oxtel/reference/integrations/) has the whole list. [Every setting](https://agentstatelabs.github.io/oxtel/reference/settings/) says what the environment can change, and [every span and metric](https://agentstatelabs.github.io/oxtel/reference/telemetry/) what each crate records.
+[What works with what](https://oxtel.agentstatelabs.com/reference/integrations/) has the whole list. [Every setting](https://oxtel.agentstatelabs.com/reference/settings/) says what the environment can change, and [every span and metric](https://oxtel.agentstatelabs.com/reference/telemetry/) what each crate records.
 
 ## Faster than the official stack
 

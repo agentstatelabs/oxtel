@@ -1,6 +1,6 @@
 # The oxtel site
 
-The source of https://agentstatelabs.github.io/oxtel/, built with
+The source of https://oxtel.agentstatelabs.com/, built with
 [Astro](https://astro.build) and [Starlight](https://starlight.astro.build).
 Pull requests that change it are built and link-checked by
 `.github/workflows/site.yml`, and main is published to GitHub Pages.

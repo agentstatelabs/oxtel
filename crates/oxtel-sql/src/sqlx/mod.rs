@@ -49,7 +49,7 @@
 //! records all of it, but only for queries run through it. The two never
 //! count a query twice: the mapping leaves alone the queries the wrapper
 //! records. See `oxtel::mappings` and the
-//! [databases guide](https://agentstatelabs.github.io/oxtel/guide/databases/).
+//! [databases guide](https://oxtel.agentstatelabs.com/guide/databases/).
 
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};

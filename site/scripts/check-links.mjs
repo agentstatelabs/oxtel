@@ -8,8 +8,8 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 const dist = process.argv[2] ?? 'dist';
-const site = 'https://agentstatelabs.github.io';
-const base = '/oxtel/';
+const site = 'https://oxtel.agentstatelabs.com';
+const base = '/';
 
 const pages = [];
 const walk = (dir) => {
