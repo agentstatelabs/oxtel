@@ -17,6 +17,8 @@ The query's text is recorded too, with every literal replaced by `?`, so values 
 | **tokio-postgres**, or a **deadpool-postgres** pool | Wrap the client where you connect: `oxtel_sql::postgres::Client::new(client, &config)`, or the pool with `oxtel_sql::postgres::Pool::new(pool, &config)`. Features `postgres` and `deadpool-postgres` | Everything: the database's name, host and port, and for a failed query its error code. A pool also gets connection pool metrics. |
 | **sqlx** 0.8 or 0.9 | Nothing, with `oxtel::init()`. Or wrap the pool for everything: `oxtel_sql::sqlx::v0_9::Pool::new(pool)` (or `v0_8`), with the feature `sqlx-0.9` (or `sqlx-0.8`) | See the next section |
 
+[Database access](/scenarios/database/) has a whole program with rusqlite, and the spans it records.
+
 ## sqlx: automatic, or complete
 
 sqlx writes a log event as each query finishes, saying what the query was, how many rows it returned and how long it took. `oxtel::init()` turns those events into database spans and metrics automatically: there's nothing to add to your code.

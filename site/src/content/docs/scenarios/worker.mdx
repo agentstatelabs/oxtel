@@ -1,0 +1,67 @@
+---
+title: A background worker
+description: A worker that takes jobs off a queue, with a span for each job carried onto the task that runs it, and each job counted and timed.
+---
+
+import { TabItem, Tabs } from '@astrojs/starlight/components';
+import Example from '../../../components/Example.astro';
+
+A program that works through jobs in the background: a queue consumer, a mailer, a thumbnail maker. Each job gets:
+
+- a span, `job`, with the job's id and kind, on the tokio task that runs it;
+- those fields and a trace id of its own on every log line it writes;
+- a count in `jobs.processed`, by outcome, and its duration in `jobs.duration`.
+
+This one is given four jobs, and stops once it has done them.
+
+## The code
+
+<Example file="examples/worker.rs" />
+
+## Dependencies
+
+<Example file="examples/worker.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/worker.rs" doc="bash" />
+
+## What it prints
+
+<Tabs>
+	<TabItem label="Anywhere else: JSON">
+		<Example file="examples/output/worker.json" title="Standard error" wrap />
+	</TabItem>
+	<TabItem label="On a terminal: text">
+		<Example file="examples/output/worker.text" title="Standard error" wrap />
+	</TabItem>
+</Tabs>
+
+Every line a job writes carries its id and kind, and its own trace id, so everything one job did can be found together. The third job fails, and says why. CI runs the example and checks it still prints these lines.
+
+## Spans and tasks
+
+`tokio::spawn` starts a task outside any span. Without `.instrument(span)`, the job's lines would carry no job fields and no trace id. `instrument` enters the span each time the task runs, and leaves it each time the task waits, so the span follows the job and nothing else.
+
+That's also why async code uses `instrument` rather than `span.enter()`: a span entered before an `.await` stays entered while the task waits, and other tasks running on the same thread meanwhile would be logged as part of it.
+
+## The metrics
+
+| Metric | What it records |
+|---|---|
+| `jobs.processed` | A counter: each job, with `outcome` set to `ok`, `failed` or `panicked` |
+| `jobs.duration` | A histogram: each job's duration, in seconds |
+
+With nothing configured, metrics aren't kept. `OTEL_METRICS_EXPORTER=console`, as in the second command above, prints them on standard output when the worker exits. Once `OTEL_EXPORTER_OTLP_ENDPOINT` is set, they're sent with the traces and logs, every 60 seconds and once more at exit. A Prometheus scrape names them `jobs_processed_total` and `jobs_duration_seconds`.
+
+Because the histogram is described in seconds, it gets the OpenTelemetry conventions' buckets for durations, from 5 ms to 10 s.
+
+## For production
+
+- **Run jobs side by side.** This worker runs one at a time, to keep its output in order. To run several at once, spawn them into a `tokio::task::JoinSet`; each still needs `.instrument(span)`.
+- **Stop gracefully.** On a signal, stop taking jobs, finish the ones in flight, and return from `main`, so oxtel sends what's pending. In a container, the platform sends `SIGTERM` rather than Ctrl-C: wait for both.
+- **Keep ids off metrics.** A job id on a metric makes a new series for every job. Put ids on spans and log lines, and give metrics a few values each, such as the outcome.
+- **Continue the sender's trace.** When another service queues the job, the message can carry its trace. The sender writes it into the message's headers with `oxtel::propagation::inject_current`; the worker creates the job's span while the guard from `oxtel::propagation::extract_parent` is alive, and the job joins the sender's trace.
+- **Say what kind of span it is.** The OpenTelemetry conventions call a span that handles a message from a queue a consumer span: add `otel.kind = "consumer"` to the span's fields.

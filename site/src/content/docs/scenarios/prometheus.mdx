@@ -1,0 +1,59 @@
+---
+title: Prometheus scraping only
+description: Metrics served at /metrics for Prometheus to scrape, with no collector, no OTLP, and no HTTP or TLS crates.
+---
+
+import Example from '../../../components/Example.astro';
+
+For a program whose metrics Prometheus collects, and that sends nothing anywhere itself. oxtel serves `/metrics` on a port of its own, from a thread of its own, so there's no web framework to add. The program records metrics with the `metrics` crate, as usual, and one setting turns the endpoint on.
+
+## The code
+
+<Example file="examples/prometheus.rs" />
+
+## Dependencies
+
+<Example file="examples/prometheus.rs" doc="toml" />
+
+Without oxtel's default features, there's no OTLP code in the program, and none of the HTTP and TLS crates it needs: the endpoint uses only the standard library. With the default features, the same program can also send traces, metrics and logs to a collector once `OTEL_EXPORTER_OTLP_ENDPOINT` is set.
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/prometheus.rs" doc="bash" />
+
+oxtel's startup line says where the endpoint is listening. The program runs until it's stopped. With nothing to send, stopping it at any moment loses nothing but the values since the last scrape, which is how Prometheus works anyway.
+
+## What a scrape shows
+
+Each metric appears under its Prometheus name: dots become underscores, the unit becomes a suffix, and counters end in `_total`.
+
+| Recorded as | Scraped as |
+|---|---|
+| `orders.placed`, a counter | `orders_placed_total`, one series per `channel` |
+| `orders.pending`, a gauge | `orders_pending` |
+| `orders.checkout.duration`, a histogram in seconds | `orders_checkout_duration_seconds`, with `_bucket`, `_sum` and `_count` series |
+
+Each has a `# HELP` line from its description. Every series also has an `otel_scope_name` label, naming the crate that recorded it, and one more series, `target_info`, describes the program itself: its service name, host and process.
+
+Prometheus asks for OpenMetrics, and gets it, with `# UNIT` lines, and exemplars linking a measurement to its trace when it was made inside a span. Anything else, such as `curl`, gets the classic text format. CI checks both formats with Prometheus's own `promtool` and a strict OpenMetrics parser.
+
+## Choices
+
+| Setting | What it does |
+|---|---|
+| `OTEL_METRICS_EXPORTER` | `prometheus` turns the endpoint on |
+| `OTEL_EXPORTER_PROMETHEUS_HOST` | the address to listen on: `localhost` by default, so only the same machine can scrape. In a container, `0.0.0.0` |
+| `OTEL_EXPORTER_PROMETHEUS_PORT` | the port: `9464` by default |
+| `OTEL_SERVICE_NAME` | the program's name, as `target_info` shows it |
+
+## With a web server of your own
+
+A program that already serves HTTP, such as an axum service, can serve `/metrics` on its own port instead, beside its routes. `oxtel_tower::MetricsService` is a tower service that answers each request with a scrape, rendered by an `oxtel::prometheus::PrometheusExporter` made from the guard's meter provider. Build oxtel with `oxtel::builder().with_pull_metrics()`, so it keeps metrics without an exporter of its own. See [its documentation](https://docs.rs/oxtel-tower).
+
+## For production
+
+- **Listen where the scraper can reach.** In a container, set `OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0`.
+- **Keep label values few.** Each distinct value makes a series of its own. A channel or an outcome is fine; a user or order id isn't.
+- **Name the service.** `OTEL_SERVICE_NAME` is how `target_info` tells your programs apart.

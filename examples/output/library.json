@@ -1,0 +1,5 @@
+{"timestamp":"2026-11-20T21:07:32.086159Z","level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)"}
+{"timestamp":"2026-11-20T21:07:32.086228Z","level":"INFO","target":"library","message":"quoted","grams":800,"country":"FR","cents":570}
+{"timestamp":"2026-11-20T21:07:32.086244Z","level":"WARN","target":"shipping","message":"over 20 kg; adding the freight surcharge","trace_id":"459bb81dafa13e5c700253b92f41f8e9","span_id":"d87cbfdc9c6c139d","grams":24000,"country":"US"}
+{"timestamp":"2026-11-20T21:07:32.086297Z","level":"INFO","target":"library","message":"quoted","grams":24000,"country":"US","cents":10900}
+{"timestamp":"2026-11-20T21:07:32.086335Z","level":"WARN","target":"library","message":"can't quote","grams":500,"country":"AQ","error":"no shipping to AQ"}

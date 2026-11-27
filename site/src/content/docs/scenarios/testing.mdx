@@ -1,0 +1,46 @@
+---
+title: Testing your telemetry
+description: Unit tests that check the span and metrics a function records, kept in memory, with nothing installed globally and nothing sent anywhere.
+---
+
+import Example from '../../../components/Example.astro';
+
+Telemetry is part of what a function does. Dashboards and alerts depend on a span's name, a metric's attributes, a failure being marked as one. A unit test can check them like any other result.
+
+These tests run a function with its spans and metrics kept in memory, then look at what it recorded. Nothing is installed globally and nothing is sent anywhere, so the tests run in parallel, as tests usually do.
+
+## The function
+
+It totals an order. Each call is a span, marked as an error when the order is rejected, and is counted by outcome:
+
+<Example file="examples/testing.rs" region="code" />
+
+## The tests
+
+<Example file="examples/testing.rs" region="tests" />
+
+## Dependencies
+
+<Example file="examples/testing.rs" doc="toml" />
+
+## Run it
+
+From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
+
+<Example file="examples/testing.rs" doc="bash" />
+
+CI runs these tests with the rest of the repository's.
+
+## How it works
+
+- **Spans.** `InMemorySpanExporter` keeps each span it's given. With `with_simple_exporter`, the `TracerProvider` gives it each span as the span ends, so they're all there when the function returns. `Sampler::AlwaysOn` keeps every span, whatever `OTEL_TRACES_SAMPLER` says.
+- **Log lines.** The `TracerProvider` keeps a line written inside a span as one of the span's events, so a test can check those too.
+- **Metrics.** `MeterProvider::collect` returns every metric recorded so far, each with its series, one per set of attributes.
+- **Only this thread.** `tracing::subscriber::with_default` and `metrics::with_local_recorder` apply to the current thread, until the closure returns. That keeps parallel tests apart. It also means work the function hands to other threads isn't captured: for async code, run a single-threaded runtime inside the closure.
+- **Failures.** oxtel reads a span's `otel.status_code` field: recording `"error"` marks the span as failed, as the function does for a rejected order.
+
+In an async test, such as one with `#[tokio::test]`, use the forms that return a guard instead of taking a closure: `tracing::subscriber::set_default` and `metrics::set_default_local_recorder`.
+
+## In a library
+
+A library that doesn't depend on oxtel tests its telemetry the same way, with `oxtel-sdk` as a dev-dependency instead: the same types, from `oxtel_sdk` instead of `oxtel::sdk`. [A library crate](/scenarios/library/) has more on instrumenting one.

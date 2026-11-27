@@ -170,8 +170,10 @@ fn gen_semconv() -> Result<(), Box<dyn std::error::Error>> {
 /// Builds each example whose documentation has ```` ```toml ```` blocks of
 /// `[dependencies]` as a program of its own, once for each block, with
 /// exactly those dependencies, so the lines shown to readers (in the
-/// example and on the site) are known to be enough. The oxtel crates come
-/// from this checkout.
+/// example and on the site) are known to be enough. Its tests are built
+/// too, so a block's `[dev-dependencies]` are checked as well. The oxtel
+/// crates come from this checkout, and a `path` dependency is found from
+/// `examples/`, as `examples/Cargo.toml` finds it.
 fn check_examples() -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
     let work = root.join("target/example-check");
@@ -196,6 +198,7 @@ fn check_examples() -> Result<(), Box<dyn std::error::Error>> {
             };
             let dir = work.join(&name);
             std::fs::create_dir_all(dir.join("src"))?;
+            let dependencies = with_paths_from(&dependencies, &root.join("examples"));
             let mut manifest = format!(
                 "[package]\nname = \"example-{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\npublish = false\n\n[workspace]\n\n{dependencies}\n[patch.crates-io]\n"
             );
@@ -219,7 +222,7 @@ fn check_examples() -> Result<(), Box<dyn std::error::Error>> {
             );
             let status = Command::new(&cargo)
                 .current_dir(&dir)
-                .args(["check", "--quiet"])
+                .args(["check", "--quiet", "--all-targets"])
                 .env("CARGO_TARGET_DIR", work.join("target"))
                 .status()?;
             if !status.success() {
@@ -263,6 +266,23 @@ fn documented_dependencies(source: &str) -> Vec<String> {
     blocks
 }
 
+/// `block` with each `path = "…"` found from `base`.
+fn with_paths_from(block: &str, base: &Path) -> String {
+    const KEY: &str = "path = \"";
+    let mut out = String::with_capacity(block.len());
+    let mut rest = block;
+    while let Some(at) = rest.find(KEY) {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + KEY.len()..];
+        let end = after.find('"').unwrap_or(after.len());
+        let path = base.join(&after[..end]).display().to_string();
+        out.push_str(&format!("path = {path:?}"));
+        rest = after.get(end + 1..).unwrap_or("");
+    }
+    out.push_str(rest);
+    out
+}
+
 fn dependency_names(block: &str) -> impl Iterator<Item = &str> {
     block
         .lines()
@@ -272,11 +292,12 @@ fn dependency_names(block: &str) -> impl Iterator<Item = &str> {
 }
 
 /// Runs each example that has a file in `examples/output/` and compares
-/// what it writes to standard error with the file.
-/// `examples/output/<example>.<format>` is that output with
-/// `OXTEL_LOG_FORMAT=<format>` (`text`, `json` or `ecs`) and nothing else
-/// set. Timestamps and trace and span ids change on every run, so they're
-/// compared by their shape alone.
+/// what it prints with the file. `examples/output/<example>.<format>` is
+/// what it writes to standard error with `OXTEL_LOG_FORMAT=<format>`
+/// (`text`, `json` or `ecs`) and nothing else set; `<example>.spans` is
+/// what it writes to standard output with `OTEL_TRACES_EXPORTER=console`
+/// and no log lines, its spans. Timestamps, trace and span ids and span
+/// durations change on every run, so they're compared by their shape alone.
 fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
     let root = workspace_root();
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
@@ -292,9 +313,9 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
         ) else {
             continue;
         };
-        if !matches!(format, "text" | "json" | "ecs") {
+        if !matches!(format, "text" | "json" | "ecs" | "spans") {
             return Err(format!(
-                "{}: the extension must be text, json or ecs",
+                "{}: the extension must be text, json, ecs or spans",
                 path.display()
             )
             .into());
@@ -325,11 +346,18 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
                 run.env_remove(key);
             }
         }
-        let output = run.env("OXTEL_LOG_FORMAT", format).output()?;
+        let spans = format == "spans";
+        if spans {
+            run.env("OXTEL_LOG_FORMAT", "none")
+                .env("OTEL_TRACES_EXPORTER", "console");
+        } else {
+            run.env("OXTEL_LOG_FORMAT", format);
+        }
+        let output = run.output()?;
         if !output.status.success() {
             return Err(format!("examples/{example}.rs failed: {}", output.status).into());
         }
-        let got = String::from_utf8(output.stderr)?;
+        let got = String::from_utf8(if spans { output.stdout } else { output.stderr })?;
         let shown = path.strip_prefix(&root).unwrap_or(path).display();
         if bless {
             std::fs::write(path, &got)?;
@@ -355,8 +383,9 @@ fn check_output(bless: bool) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// `text` with each timestamp (`2026-10-09T12:00:00.123456Z`) replaced by
-/// `<time>`, and each trace or span id (32 or 16 lowercase hex digits) by
-/// `<id>`.
+/// `<time>`, each trace or span id (32 or 16 lowercase hex digits) by
+/// `<id>`, and each span's duration (`duration=0.042ms`) by
+/// `duration=<duration>`.
 fn shape(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = String::with_capacity(text.len());
@@ -366,6 +395,11 @@ fn shape(text: &str) -> String {
         if !after_word {
             if let Some(len) = timestamp_len(&bytes[i..]) {
                 out.push_str("<time>");
+                i += len;
+                continue;
+            }
+            if let Some(len) = duration_len(&bytes[i..]) {
+                out.push_str("duration=<duration>");
                 i += len;
                 continue;
             }
@@ -413,6 +447,18 @@ fn timestamp_len(bytes: &[u8]) -> Option<usize> {
     (bytes.get(len) == Some(&b'Z')).then_some(len + 1)
 }
 
+/// The length of the console exporter's `duration=<milliseconds>ms` that
+/// `bytes` starts with, if any.
+fn duration_len(bytes: &[u8]) -> Option<usize> {
+    let rest = bytes.strip_prefix(b"duration=")?;
+    let number = rest
+        .iter()
+        .take_while(|b| b.is_ascii_digit() || **b == b'.')
+        .count();
+    let len = b"duration=".len() + number;
+    (number > 0 && bytes[len..].starts_with(b"ms")).then_some(len + 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -433,6 +479,30 @@ mod tests {
         assert_eq!(
             shape("deadbeef x1be284c0a8537bcc 1be284c0a8537bcc0"),
             "deadbeef x1be284c0a8537bcc 1be284c0a8537bcc0"
+        );
+        // A span from the console exporter.
+        assert_eq!(
+            shape(
+                r#"2026-11-20T20:25:17.000001Z span "SELECT orders" kind=client status=unset duration=0.042ms trace_id=7ecfce50f920491ee1086c2912891261"#
+            ),
+            r#"<time> span "SELECT orders" kind=client status=unset duration=<duration> trace_id=<id>"#
+        );
+        // Not a span's duration: a field of the program's own.
+        assert_eq!(
+            shape("job.duration=3 duration=fast"),
+            "job.duration=3 duration=fast"
+        );
+    }
+
+    #[test]
+    fn paths_are_found_from_the_examples() {
+        let base = Path::new("/repo/examples");
+        assert_eq!(
+            with_paths_from(
+                "[dependencies]\nshipping = { path = \"shipping\" }\noxtel = \"0.3\"\n",
+                base
+            ),
+            "[dependencies]\nshipping = { path = \"/repo/examples/shipping\" }\noxtel = \"0.3\"\n"
         );
     }
 }

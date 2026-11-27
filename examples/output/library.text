@@ -1,0 +1,5 @@
+2026-11-20T21:07:32.427148Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-20T21:07:32.427221Z  INFO library: quoted grams=800 country=FR cents=570
+2026-11-20T21:07:32.427231Z  WARN quote{grams=24000 country=US}: shipping: over 20 kg; adding the freight surcharge trace_id=b45ab15c11ead117db5eefb18b8262de span_id=30821bafcf4fd752
+2026-11-20T21:07:32.427239Z  INFO library: quoted grams=24000 country=US cents=10900
+2026-11-20T21:07:32.427250Z  WARN library: can't quote grams=500 country=AQ error="no shipping to AQ"

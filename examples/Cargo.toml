@@ -13,8 +13,12 @@ oxtel = { path = "../crates/oxtel" }
 oxtel-otlp = { path = "../crates/oxtel-otlp" }
 oxtel-prometheus = { path = "../crates/oxtel-prometheus" }
 oxtel-sdk = { path = "../crates/oxtel-sdk" }
+oxtel-sql = { path = "../crates/oxtel-sql", features = ["rusqlite"] }
 oxtel-tower = { path = "../crates/oxtel-tower", features = ["axum"] }
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal"] }
+rusqlite = { version = "0.39", features = ["bundled"] }
+# The library in the library scenario, which uses tracing and metrics alone.
+shipping = { path = "shipping" }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std", "fmt"] }
 
@@ -33,3 +37,29 @@ path = "logs.rs"
 [[example]]
 name = "web"
 path = "web.rs"
+
+[[example]]
+name = "cli"
+path = "cli.rs"
+
+[[example]]
+name = "worker"
+path = "worker.rs"
+
+[[example]]
+name = "database"
+path = "database.rs"
+
+[[example]]
+name = "prometheus"
+path = "prometheus.rs"
+
+[[example]]
+name = "library"
+path = "library.rs"
+
+# Its unit tests are the example, so `cargo test` runs them.
+[[example]]
+name = "testing"
+path = "testing.rs"
+test = true

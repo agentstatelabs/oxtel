@@ -1,0 +1,2 @@
+2026-11-20T21:07:31.455157Z  INFO oxtel: log lines: standard error, as text; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)
+2026-11-20T21:07:31.456273Z  INFO report: database: tea sold orders=2 cents=900 trace_id=4f4ccad47c8395f6058df81a15dbb48e span_id=a67e04cf68a104bb

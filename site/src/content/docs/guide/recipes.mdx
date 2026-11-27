@@ -35,6 +35,8 @@ The startup line shows where everything goes; it never shows the headers.
 
 `OTEL_METRICS_EXPORTER=prometheus` serves your metrics at `http://localhost:9464/metrics` for Prometheus to scrape. In a container, also set `OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0` so the scraper can reach it. To serve `/metrics` from your own axum router instead, see `oxtel_tower::MetricsService`.
 
+[Prometheus scraping only](/scenarios/prometheus/) has the whole program.
+
 ## A web service
 
 With `oxtel-tower` and its `axum` feature, one layer gives every request a span named by its route (`GET /orders/{id}`), continues the caller's trace if it sent one, logs a `request` line with the status and duration, and records `http.server.request.duration`:
