@@ -1840,6 +1840,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "oxtel-reqwest"
+version = "0.3.1"
+dependencies = [
+ "async-trait",
+ "axum",
+ "http",
+ "metrics",
+ "oxtel-sdk",
+ "oxtel-semconv",
+ "oxtel-tower",
+ "reqwest",
+ "reqwest-middleware",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "oxtel-rmcp"
 version = "0.3.1"
 dependencies = [
@@ -2503,6 +2521,20 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "reqwest-middleware"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "07bc3f1384cffa4f274dad2d4ddd73aed32fed8f786d96c6be8aa4e5fd3c3b58"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "http",
+ "reqwest",
+ "thiserror",
+ "tower-service",
 ]
 
 [[package]]
