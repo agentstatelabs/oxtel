@@ -6,11 +6,16 @@ All notable changes to oxtel are recorded here. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-11-28
+
+A helper for testing which names telemetry is recorded under, and a new home for the documentation: https://oxtel.agentstatelabs.com, now every crate's homepage, with the README that crates.io shows pointing to it. Coming from 0.4.1, nothing else changes.
+
 ### Added
 - **`oxtel_sdk::testing`, for testing what's recorded under which names.** `recorded_names(&spans, &metrics)` turns what a pipeline recorded into sorted text of its names: each span's scope, kind and name with its attribute keys, and each metric's instrument, name and unit with its label keys. Values are left out, so the text changes only when a name does. `assert_recorded_names` keeps that text in a file and fails when it changes, or rewrites the file when asked. oxtel's own instrumentation crates now keep what their tests record this way, and the site's list of every span and metric is generated from those files.
 
 ### Changed
 - **The documentation site is at https://oxtel.agentstatelabs.com.** Every crate's `homepage` now points there, and the old address, agentstatelabs.github.io/oxtel, redirects to it.
+- **The README is a short pointer at the site:** the pitch, the three steps, what oxtel works with, the benchmarks' headline and the principles. The settings, what each crate records, and guides for backends, deployment and moving from other setups are on the site.
 
 ## [0.4.1] - 2026-11-27
 
@@ -301,7 +306,8 @@ Benchmarks against the official OpenTelemetry Rust stack are in `bench/RESULTS.m
   - Retries with backoff for 429, 502, 503, 504 and connection failures, honouring `Retry-After`. Other failures aren't retried.
   - Rejected spans from partial-success responses are counted.
 
-[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/agentstatelabs/oxtel/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/agentstatelabs/oxtel/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/agentstatelabs/oxtel/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/agentstatelabs/oxtel/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/agentstatelabs/oxtel/compare/v0.3.0...v0.3.1
