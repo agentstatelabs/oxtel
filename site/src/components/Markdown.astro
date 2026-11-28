@@ -1,0 +1,74 @@
+---
+// Shows part of a Markdown file in the repository, rendered when the site
+// is built, so a page says what the file says now rather than a copy of it.
+// `section` picks the text under one `## ` heading, without the heading,
+// which the page gives itself; `lead` picks the text between the file's
+// title and its first `## `, or all of it if there's none. Anything missing
+// fails the build. Code blocks are shown as the rest of the site's code is.
+import { Code } from '@astrojs/starlight/components';
+import { createMarkdownProcessor } from '@astrojs/markdown-remark';
+import { readFileSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
+
+interface Props {
+	file: string;
+	section?: string;
+	lead?: boolean;
+}
+
+const { file, section, lead } = Astro.props;
+const root = resolve(process.cwd(), '..');
+const path = resolve(root, file);
+if (relative(root, path).startsWith('..')) {
+	throw new Error(`${file} is outside the repository`);
+}
+const lines = readFileSync(path, 'utf8').split('\n');
+
+let body: string[];
+if (section) {
+	const start = lines.findIndex((line) => line.trim() === `## ${section}`);
+	if (start < 0) throw new Error(`${file} has no section "## ${section}"`);
+	const rest = lines.slice(start + 1);
+	const end = rest.findIndex((line) => /^#{1,2} /.test(line));
+	body = end < 0 ? rest : rest.slice(0, end);
+} else if (lead) {
+	const rest = lines.slice(lines.findIndex((line) => line.startsWith('# ')) + 1);
+	const end = rest.findIndex((line) => line.startsWith('## '));
+	body = end < 0 ? rest : rest.slice(0, end);
+} else {
+	throw new Error(`Markdown for ${file} needs a section or lead`);
+}
+
+type Part = { text: string } | { code: string; lang: string };
+const parts: Part[] = [];
+let text: string[] = [];
+let code: string[] | undefined;
+let lang = 'text';
+for (const line of body) {
+	const fence = line.match(/^```(\w*)\s*$/);
+	if (!code && fence) {
+		parts.push({ text: text.join('\n') });
+		text = [];
+		code = [];
+		lang = fence[1] || 'text';
+	} else if (code && line.trim() === '```') {
+		parts.push({ code: code.join('\n'), lang });
+		code = undefined;
+	} else if (code) {
+		code.push(line);
+	} else {
+		text.push(line);
+	}
+}
+if (code) throw new Error(`${file} has a code block that isn't closed`);
+parts.push({ text: text.join('\n') });
+
+const processor = await createMarkdownProcessor({ syntaxHighlight: false });
+const shown = await Promise.all(
+	parts.map(async (part) =>
+		'text' in part ? { html: (await processor.render(part.text)).code } : part,
+	),
+);
+---
+
+{shown.map((part) => ('html' in part ? <Fragment set:html={part.html} /> : <Code code={part.code} lang={part.lang} />))}

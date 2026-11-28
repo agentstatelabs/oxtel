@@ -1,0 +1,27 @@
+---
+// The fuzz targets in fuzz/fuzz_targets/, each with what its `//!`
+// documentation says it checks, read when the site is built.
+import { createMarkdownProcessor } from '@astrojs/markdown-remark';
+import { readdirSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+
+const dir = resolve(process.cwd(), '..', 'fuzz/fuzz_targets');
+const targets = readdirSync(dir)
+	.filter((name) => name.endsWith('.rs'))
+	.sort()
+	.map((name) => {
+		const doc = readFileSync(resolve(dir, name), 'utf8')
+			.split('\n')
+			.filter((line) => line.startsWith('//!'))
+			.map((line) => line.replace(/^\/\/! ?/, ''))
+			.join(' ')
+			.trim();
+		if (!doc) throw new Error(`fuzz/fuzz_targets/${name} says nothing about what it checks`);
+		return `- **\`${name.replace(/\.rs$/, '')}\`**: ${doc}`;
+	});
+if (targets.length === 0) throw new Error('fuzz/fuzz_targets/ has no targets');
+const processor = await createMarkdownProcessor({ syntaxHighlight: false });
+const { code } = await processor.render(targets.join('\n'));
+---
+
+<Fragment set:html={code} />

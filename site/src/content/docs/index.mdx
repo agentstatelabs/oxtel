@@ -94,11 +94,11 @@ Measured against the official OpenTelemetry Rust SDK with `tracing-opentelemetry
 | A counter, 8 threads on one series | **0.4–0.6 ns** | 20–65 ns |
 | CPU per span, sent over OTLP at 40,000 spans/s | **5.3 µs** | 7.2 µs |
 
-In a burst, oxtel exports 1.9 times as many spans a second, with 2.5 times less CPU per span, and both stay within 1.5 MiB. [The benchmarks](https://github.com/agentstatelabs/oxtel/blob/main/bench/RESULTS.md) say how each was measured and made fair, with every number and how to reproduce them.
+In a burst, oxtel exports 1.9 times as many spans a second, with 2.5 times less CPU per span, and both stay within 1.5 MiB. [The comparison](/reference/compare/) says how each was measured and made fair, with every number and how to reproduce them.
 
 ## Checked against the real thing
 
-- **An OpenTelemetry Collector** decodes oxtel's traces, metrics and logs on every change, over protobuf and JSON, and CI compares what it got with what was sent. [The conformance tests](https://github.com/agentstatelabs/oxtel/blob/main/conformance/README.md) list what's checked.
+- **An OpenTelemetry Collector** decodes oxtel's traces, metrics and logs on every change, over protobuf and JSON, and CI compares what it got with what was sent. [Conformance](/reference/conformance/) lists everything CI checks against.
 - **Prometheus's own checker**, `promtool`, reads oxtel's `/metrics` page, and the Collector's Prometheus receiver scrapes it.
 - **The names come from the conventions.** OpenTelemetry's Weaver generates them from a pinned conventions release, and CI checks they match.
 - **Input from outside is fuzzed.** On every change, CI fuzzes the parsers of trace context and baggage headers, configuration files, and the lists in environment variables: none may panic, and accepted trace context and baggage must come back unchanged from a round trip. Property tests check the same of the trace context, baggage and resource attribute parsers.
