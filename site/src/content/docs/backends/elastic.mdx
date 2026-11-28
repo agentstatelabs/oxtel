@@ -43,4 +43,4 @@ Each line is then a JSON object laid out as the ecs-logging specification says: 
 
 ## How it's checked
 
-On every change, CI starts this stack, runs [the background worker](/scenarios/worker/) with these settings, and asks Elasticsearch for its four job transactions, its failed job's log record and its `jobs.processed` counter, then checks Kibana is available. `check.sh`, beside the compose file, has the queries. oxtel's tests check its ECS lines against the ecs-logging layout.
+On every change, CI starts this stack and waits until APM Server and Kibana are both ready. It then runs [the background worker](/scenarios/worker/) with these settings, and asks Elasticsearch for its four job transactions, its failed job's log record and its `jobs.processed` counter. `check.sh`, beside the compose file, has the queries. oxtel's tests check its ECS lines against the ecs-logging layout.

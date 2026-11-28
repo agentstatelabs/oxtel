@@ -12,8 +12,9 @@
 #   settings.sh   the program's settings, as `export` lines
 #   check.sh      defines `ready`, which succeeds once the stack takes
 #                 telemetry, and `arrived`, once the backend has it. It may
-#                 also define `send`, to send more than the worker's, and
-#                 `stop`, to stop what `send` left running.
+#                 also define `send`, to send more than the worker's,
+#                 `stop`, to stop what `send` left running, and `patience`,
+#                 how many seconds to wait for each, 120 unless it says.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd)
@@ -21,15 +22,15 @@ root=$(cd "$here/../.." && pwd)
 cd "$here"
 if [ $# -gt 0 ]; then backends=("$@"); else backends=(*/); fi
 
-# Retries a command every 2 seconds, for up to 2 minutes.
+# Retries a command every 2 seconds, for up to `patience` seconds.
 wait_for() {
     local what=$1
     shift
-    for _ in $(seq 1 60); do
+    for _ in $(seq 1 $((patience / 2))); do
         if "$@" >/dev/null 2>&1; then return 0; fi
         sleep 2
     done
-    echo "$what: gave up after 2 minutes" >&2
+    echo "$what: gave up after $patience seconds" >&2
     return 1
 }
 
@@ -44,6 +45,7 @@ check() {
     docker compose up -d --quiet-pull
     # On failure, show what the stack logged; then remove it either way.
     trap 'status=$?; if declare -F stop >/dev/null; then stop; fi; if [ $status -ne 0 ]; then docker compose logs --tail 60; fi; docker compose down -v --remove-orphans >/dev/null 2>&1; exit $status' EXIT
+    patience=120
     # shellcheck source=/dev/null
     source ./check.sh
     wait_for "$name isn't ready" ready
