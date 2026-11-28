@@ -20,6 +20,12 @@ data:
     exporters:
       debug:
         verbosity: detailed
+      # To send on to a backend, add its exporter, with the key from the
+      # BACKEND_TOKEN variable below, and list it in each pipeline.
+      # otlphttp:
+      #   endpoint: https://otlp.example.com
+      #   headers:
+      #     Authorization: Bearer ${env:BACKEND_TOKEN}
     service:
       extensions: [health_check]
       pipelines:
@@ -51,6 +57,16 @@ spec:
         - name: collector
           image: otel/opentelemetry-collector-contrib:0.161.0
           args: [--config=/etc/otelcol/config.yaml]
+          env:
+            # The backend's key, from a Secret you make with
+            # kubectl create secret generic backend --from-literal=token=...
+            # Optional, so the Collector starts before there's one.
+            - name: BACKEND_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backend
+                  key: token
+                  optional: true
           ports:
             - containerPort: 4318
             - containerPort: 4317

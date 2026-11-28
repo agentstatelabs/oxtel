@@ -28,6 +28,8 @@ From a checkout of [the repository](https://github.com/agentstatelabs/oxtel):
 
 ## For production
 
-- **Stop gracefully.** On a signal, the server finishes the requests in flight and `main` returns, so oxtel sends what's pending. Without it, the last few seconds of telemetry are lost. In a container, the platform sends `SIGTERM` rather than Ctrl-C: wait for both.
+- **Stop gracefully.** On a signal, the server finishes the requests in flight and `main` returns, so oxtel sends what's pending. Without it, the last few seconds of telemetry are lost. In a container, or under Kubernetes or systemd, the platform sends `SIGTERM` rather than Ctrl-C: wait for both, and listen on every interface. [In a container](/deploy/docker/) has a service that does both.
 - **Name the service.** `OTEL_SERVICE_NAME` is how backends will show it.
-- **Send it somewhere.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector, as in [Get started](/start/).
+- **Send it somewhere.** Set `OTEL_EXPORTER_OTLP_ENDPOINT` to your collector, as in [Get started](/start/), or see [Backends](/backends/).
+- **Replace what was there.** Only one `tracing` subscriber can be installed, so remove an existing `tracing_subscriber::fmt()` setup: [from tracing-subscriber's fmt](/migrate/fmt/). Remove tower-http's `TraceLayer` too, or each request can get two spans.
+- **Metrics of your own.** Add `metrics = "0.24"` and record with its macros, as [a background worker](/scenarios/worker/) does; they're sent with the layer's.

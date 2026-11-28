@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <rect width="1200" height="630" fill="#17181c"/>
+  <rect x="0" y="0" width="1200" height="10" fill="#ea580c"/>
+  <g transform="translate(96 150) scale(5)">
+    <circle cx="11" cy="12" r="8" fill="none" stroke="#f5f5f4" stroke-width="3.5"/>
+    <path d="M25 5 L38 19 M38 5 L25 19" stroke="#fb923c" stroke-width="3.5" stroke-linecap="round"/>
+  </g>
+  <text x="340" y="250" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="112" font-weight="700" fill="#f5f5f4">oxtel</text>
+  <text x="96" y="390" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="50" font-weight="700" fill="#f5f5f4">Telemetry for Rust, without the ceremony</text>
+  <text x="96" y="460" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="32" fill="#c0c2c7">Structured logs in one line. OpenTelemetry traces, metrics</text>
+  <text x="96" y="504" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="32" fill="#c0c2c7">and logs when you want them, without changing your code.</text>
+  <text x="96" y="574" font-family="Helvetica Neue, Helvetica, Arial, sans-serif" font-size="28" fill="#fb923c">oxtel.agentstatelabs.com</text>
+</svg>

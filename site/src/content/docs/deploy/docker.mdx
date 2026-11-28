@@ -12,7 +12,9 @@ Four things matter for a program in a container, and oxtel takes care of two of 
 - **Stopping cleanly.** Docker stops a container with SIGTERM. The program has to handle it, or what it hasn't sent yet is lost.
 - **Listening on every interface,** so requests from outside the container arrive: `0.0.0.0`, not `127.0.0.1`.
 
-[The service example](https://github.com/agentstatelabs/oxtel/blob/main/examples/service.rs) does all four, and the files here run it.
+The service example does all four, and the files here run it:
+
+<Example file="examples/service.rs" />
 
 ## The image
 
@@ -29,9 +31,7 @@ The files are in the repository's `examples/deploy/`. Build the image from the r
 
 <Example file="examples/service.rs" region="stop" />
 
-The server then finishes the requests in flight, `main` returns, and the guard sends what's left, waiting up to 5 seconds for the receiver. Keep the stop timeout above that: Docker's default of 10 seconds is enough.
-
-<Example file="examples/service.rs" region="serve" />
+The server then finishes the requests in flight, `main` returns, and the guard sends what's left. It waits up to 5 seconds for the receiver, whatever the export timeouts say, or as long as `.with_shutdown_timeout` on `oxtel::builder()` sets. Keep the stop timeout above that: Docker's default of 10 seconds is enough.
 
 ## Log lines
 

@@ -16,7 +16,7 @@ A backend keeps telemetry and lets you search it. oxtel speaks OTLP, which almos
 | [The OpenTelemetry Collector](/backends/collector/) | Nothing: it sends telemetry on, to backends of your choice | OTLP |
 | [Prometheus](/backends/prometheus/) | Metrics | Scraping `/metrics`, or OTLP |
 
-Every stack here runs in CI on every change: CI starts it, runs [the background worker](/scenarios/worker/) with the page's settings, and checks the backend has the worker's telemetry, with the same files the pages show. They're in the repository's [`examples/backends/`](https://github.com/agentstatelabs/oxtel/tree/main/examples/backends), with `run.sh` to run the checks yourself.
+Every stack here runs in CI on every change: CI starts it, runs [the background worker](/scenarios/worker/) with the page's settings, and checks the backend has the worker's telemetry, with the same files the pages show. They're in the repository's [`examples/backends/`](https://github.com/agentstatelabs/oxtel/tree/main/examples/backends), with `run.sh` to run the checks yourself; or copy the files from the pages into a directory of your own.
 
 <CardGrid>
 	<LinkCard title="Elastic" description="Traces, metrics and logs through APM Server's OTLP endpoint, or log lines in the Elastic Common Schema." href="/backends/elastic/" />

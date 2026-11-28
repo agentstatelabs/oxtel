@@ -1,4 +1,4 @@
-# Grafana on http://localhost:3000, showing traces kept by Tempo, logs kept
+# Grafana on http://localhost:3300, showing traces kept by Tempo, logs kept
 # by Loki and metrics kept by Prometheus. Each of the three takes OTLP
 # itself, so nothing else sits in between.
 services:
@@ -32,4 +32,5 @@ services:
     volumes:
       - ./datasources.yaml:/etc/grafana/provisioning/datasources/datasources.yaml:ro
     ports:
-      - "3000:3000"
+      # 3300 on your machine, leaving 3000 to the web service example.
+      - "3300:3000"

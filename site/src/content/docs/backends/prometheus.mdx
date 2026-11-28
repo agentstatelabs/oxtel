@@ -7,7 +7,7 @@ import Example from '../../../components/Example.astro';
 
 Prometheus keeps metrics and answers queries about them. It gets them two ways, and oxtel does both:
 
-- **Scraping:** Prometheus fetches `/metrics` from each program every few seconds. Best for services that run all the time, and needs nothing but oxtel, without its default features.
+- **Scraping:** Prometheus fetches `/metrics` from each program at an interval, a minute by default. Best for services that run all the time, and needs nothing but oxtel, without its default features.
 - **Pushing over OTLP:** the program sends its metrics to Prometheus, as it would to any backend. Best for programs that don't run long enough to be scraped, such as jobs and command-line tools, and for programs Prometheus can't reach.
 
 ## Run it
@@ -32,7 +32,7 @@ oxtel serves `/metrics` on port 9464. Listening on every interface lets Promethe
 
 <Example file="examples/backends/prometheus/settings.sh" />
 
-Prometheus takes metrics only, so send only those, with the metrics endpoint alone. It expects totals, which is oxtel's default, so leave `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` unset.
+Prometheus takes metrics only, so send only those, with the metrics endpoint alone. oxtel pushes them every minute by default, and when the program stops; the settings above push them every 5 seconds while you try it out. It expects totals, which is oxtel's default, so leave `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE` unset.
 
 ## The names in Prometheus
 

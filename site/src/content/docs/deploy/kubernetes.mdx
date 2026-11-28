@@ -16,7 +16,7 @@ Two common ways to run it:
 - **A gateway:** one Deployment behind a Service, which every pod sends to by name. The simplest, and enough for most clusters.
 - **An agent:** one Collector on each node, as a DaemonSet, which pods on that node send to through the node's address. Telemetry stays on the node until the Collector has batched it, and per-node work, such as reading the node's own metrics, has a place to run.
 
-The gateway, which prints what arrives; add your backend's exporter to its configuration:
+The gateway, which prints what arrives. To send on to a backend, add its exporter to the configuration, as the comment shows, and keep its key in a Secret, which the Collector reads as `BACKEND_TOKEN`:
 
 <Example file="examples/deploy/kubernetes/collector.yaml" />
 
@@ -30,6 +30,7 @@ With the agent, give the service `HOST_IP` from the downward API's `status.hostI
 
 <Example file="examples/deploy/kubernetes/service.yaml" />
 
+- **The image.** Build yours as [in a container](/deploy/docker/#the-image), push it to a registry your cluster pulls from, and name it in `image`.
 - **`OTEL_EXPORTER_OTLP_ENDPOINT`** names the Collector's Service. Nothing else about sending needs setting.
 - **Stopping.** Kubernetes sends SIGTERM, and kills the pod 30 seconds later, its default `terminationGracePeriodSeconds`. The service stops at once, after sending what's pending.
 - **Probes** go to `/healthz`, which the service answers outside its HTTP layer, so they aren't traced, logged or counted with real requests.
@@ -46,7 +47,7 @@ oxtel records the pod's attributes on everything it sends, so a backend can tell
 | `k8s.pod.uid` | `OTEL_RESOURCE_ATTRIBUTES`, from the downward API's `metadata.uid`, as above. cgroup v2 hides the pod's cgroup path from it, where oxtel would otherwise read the UID. |
 | `k8s.deployment.name`, and anything else | `OTEL_RESOURCE_ATTRIBUTES` |
 
-The container's id isn't among them: under cgroup v2 a pod can't see it. Without the service account's file, pass the namespace in too, from `metadata.namespace`. The Collector's `k8sattributes` processor can add more, such as the pod's labels, by looking each pod up in the Kubernetes API.
+The container's id isn't among them: a pod can't see it under cgroup v2, though a container that Docker runs can, which is where oxtel finds it [in a container](/deploy/docker/). Without the service account's file, pass the namespace in too, from `metadata.namespace`. The Collector's `k8sattributes` processor can add more, such as the pod's labels, by looking each pod up in the Kubernetes API.
 
 ## How it's checked
 

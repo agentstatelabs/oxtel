@@ -27,11 +27,13 @@ Set these where your program runs, then start it:
 
 <Example file="examples/backends/grafana/settings.sh" />
 
-Each kind of telemetry has its own endpoint, used exactly as given, so each needs its full path. Open http://localhost:3000 and go to Explore:
+Each kind of telemetry has its own endpoint, used exactly as given, so each needs its full path. Open http://localhost:3300 and go to Explore:
 
 - **Logs:** choose Loki and query `{service_name="worker"}`. Loki turns `service.name` into the label `service_name`, and keeps each line's trace id beside it, so a line written inside a span links to its trace.
 - **Traces:** choose Tempo and search for the service, or query `{resource.service.name="worker"}`.
-- **Metrics:** choose Prometheus and query `jobs_processed_total{job="worker"}`. [Prometheus](/backends/prometheus/#the-names-in-prometheus) explains how the names change.
+- **Metrics:** choose Prometheus and query `jobs_processed_total{job="worker"}`. For a web service with oxtel-tower, `http_server_request_duration_seconds_count` counts its requests, by `http_route` and `http_response_status_code`. [Prometheus](/backends/prometheus/#the-names-in-prometheus) explains how the names change.
+
+Metrics are sent every minute by default, and when the program stops; the settings above send them every 5 seconds while you try it out. Spans and log records go within a few seconds.
 
 ## In production
 

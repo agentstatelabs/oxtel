@@ -26,6 +26,8 @@ You don't need to know OpenTelemetry to use oxtel. Start with logs, and add the 
 
    The graceful shutdown matters: when the program is stopped, it lets `main` return, so what's still pending is sent. [A web service](/scenarios/web-service/) has the whole program.
 
+   Already logging with `tracing_subscriber::fmt()`? Replace that line with `oxtel::init()`, since only one can be installed: [from tracing-subscriber's fmt](/migrate/fmt/) says what changes. If the router has tower-http's `TraceLayer`, remove it too: `HttpServerLayer` does its job, and with both, each request can get two spans.
+
 3. **Send it somewhere.** Point oxtel at an OpenTelemetry Collector, or at any backend that accepts OTLP, and traces, metrics and logs go there. There's nothing to change in your code:
 
    ```bash

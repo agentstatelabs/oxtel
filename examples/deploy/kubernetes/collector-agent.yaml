@@ -19,6 +19,13 @@ spec:
         - name: collector
           image: otel/opentelemetry-collector-contrib:0.161.0
           args: [--config=/etc/otelcol/config.yaml]
+          env:
+            - name: BACKEND_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: backend
+                  key: token
+                  optional: true
           ports:
             - containerPort: 4318
               hostPort: 4318

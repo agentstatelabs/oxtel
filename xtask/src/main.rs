@@ -27,6 +27,12 @@ use std::process::{Command, ExitCode};
 mod settings;
 mod telemetry;
 
+/// Opens the name cell of a row in a generated reference page. The site's
+/// search weighs what's inside it as it does a page's title, so searching
+/// for a setting or an attribute finds the page that defines it first,
+/// though other pages mention the name more often.
+const WEIGHT: &str = r#"<span data-pagefind-weight="7">"#;
+
 /// The Weaver release the templates are written for.
 const WEAVER_VERSION: &str = "0.26.1";
 /// The semantic conventions release `oxtel_semconv::{attribute, metric}`
