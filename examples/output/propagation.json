@@ -1,0 +1,3 @@
+{"timestamp":"2026-11-27T23:42:52.827458Z","level":"INFO","target":"oxtel","message":"log lines: standard error, as JSON; traces, metrics and logs: not exported (set OTEL_EXPORTER_OTLP_ENDPOINT to send them to a collector)"}
+{"timestamp":"2026-11-27T23:42:52.827567Z","level":"INFO","target":"propagation","message":"sending the order","trace_id":"9afbc74f582571536a66763bbb8b2444","span_id":"1ee7a4cd050056b3"}
+{"timestamp":"2026-11-27T23:42:52.827644Z","level":"INFO","target":"propagation","message":"handling the order","trace_id":"9afbc74f582571536a66763bbb8b2444","span_id":"27ca83849194ec64"}

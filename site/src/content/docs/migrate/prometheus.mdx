@@ -1,0 +1,68 @@
+---
+title: From metrics-exporter-prometheus
+description: Swapping metrics-exporter-prometheus for oxtel's /metrics endpoint, what changes in the scrape, and how queries change with it.
+---
+
+import Example from '../../../components/Example.astro';
+
+A program that records metrics with the [`metrics`](https://docs.rs/metrics) crate and serves them with metrics-exporter-prometheus moves to oxtel by changing the line that installs the recorder. Every `metrics` call stays as it is. The scrape changes, though, in ways dashboards and alerts notice, so this page lists them.
+
+## The change
+
+The dependencies, before and after:
+
+<Example file="examples/migration/metrics-exporter-prometheus.rs" doc="toml" title="Before" />
+
+<Example file="examples/prometheus.rs" doc="toml" title="After" />
+
+The setup, before and after:
+
+<Example file="examples/migration/metrics-exporter-prometheus.rs" region="setup" title="Before: examples/migration/metrics-exporter-prometheus.rs" />
+
+<Example file="examples/prometheus.rs" region="setup" title="After: examples/prometheus.rs" />
+
+And a setting turns oxtel's endpoint on:
+
+```bash
+export OTEL_METRICS_EXPORTER=prometheus
+```
+
+To serve `/metrics` from your own axum router instead, use `oxtel_tower::MetricsService`, as [Prometheus scraping only](/scenarios/prometheus/) shows.
+
+## Where it listens
+
+| | metrics-exporter-prometheus | oxtel |
+|---|---|---|
+| Address | Every interface, `0.0.0.0` | `localhost`, unless `OTEL_EXPORTER_PROMETHEUS_HOST` says otherwise |
+| Port | 9000 | 9464, or `OTEL_EXPORTER_PROMETHEUS_PORT` |
+
+Change the scrape target's port. In a container, also set `OTEL_EXPORTER_PROMETHEUS_HOST=0.0.0.0`, so Prometheus can reach the endpoint from outside it.
+
+## What changes in the scrape
+
+oxtel follows OpenTelemetry's rules for naming metrics in Prometheus, which differ from metrics-exporter-prometheus's. Scraped from the program above:
+
+| | metrics-exporter-prometheus | oxtel |
+|---|---|---|
+| The counter `orders.placed` | `orders_placed` | `orders_placed_total` |
+| The histogram `orders.checkout.duration`, in seconds | A summary, `orders_checkout_duration`, with a `quantile` label | A histogram, `orders_checkout_duration_seconds`, with `_bucket`, `_sum` and `_count` |
+| The gauge `orders.pending` | `orders_pending` | `orders_pending` |
+| Labels | Only the program's | The program's, and `otel_scope_name`, the code that recorded it |
+| Also | | `target_info`, with the service's attributes |
+
+So queries change with them:
+
+| Before | After |
+|---|---|
+| `rate(orders_placed[5m])` | `rate(orders_placed_total[5m])` |
+| `orders_checkout_duration{quantile="0.9"}` | `histogram_quantile(0.9, sum by (le) (rate(orders_checkout_duration_seconds_bucket[5m])))` |
+
+A summary's quantiles are computed by each program and can't be added up across instances; histogram buckets can, which is why OpenTelemetry uses them. [Metrics for your backend](/guide/metrics/) covers choosing buckets, and views that rename or drop a metric before it's scraped.
+
+## And OTLP too
+
+With oxtel, the same metrics can go to a collector as well, over OTLP, by setting `OTEL_EXPORTER_OTLP_ENDPOINT` alongside: [Prometheus](/backends/prometheus/) covers both ways into Prometheus.
+
+## How it's checked
+
+CI builds the "before" program with exactly the dependencies shown. It runs the "after" program, `examples/prometheus.rs`, for [a Prometheus server to scrape](/backends/prometheus/), and checks oxtel's scrape format with Prometheus's own `promtool`. The differences above are from scraping both programs.

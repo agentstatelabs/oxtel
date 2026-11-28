@@ -26,8 +26,10 @@
 //! ```
 
 fn main() -> Result<(), oxtel::Error> {
+    // ANCHOR: setup
     // Text on a terminal, JSON anywhere else. Keep the guard alive.
     let _logs = oxtel::init()?;
+    // ANCHOR_END: setup
 
     // Fields are structured: in JSON, each is a key of its own.
     tracing::info!(user.id = 42, plan = "team", "signed in");

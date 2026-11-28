@@ -15,6 +15,7 @@ The **conventions** column says whose names the telemetry uses. Where the OpenTe
 | The `metrics` crate's counters, gauges and histograms | `oxtel::init()` installs the recorder | Supported |
 | The `log` crate | Forwarded into `tracing` by oxtel's `log` feature, on by default | Supported |
 | A library crate of your own | `tracing` and `metrics` alone, with no oxtel dependency: [a library crate](/scenarios/library/) | Supported |
+| A program set up with tracing-subscriber's `fmt`, the OpenTelemetry SDK or metrics-exporter-prometheus | Change the setup, and keep every call: [moving to oxtel](/migrate/fmt/) | Supported |
 
 ## Libraries and frameworks
 

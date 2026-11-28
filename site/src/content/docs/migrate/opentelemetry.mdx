@@ -1,0 +1,70 @@
+---
+title: From the OpenTelemetry SDK
+description: Replacing tracing-opentelemetry, opentelemetry_sdk and opentelemetry-otlp with oxtel, what to delete, the settings that stay the same, and what changes for metrics.
+---
+
+import Example from '../../../components/Example.astro';
+
+A program that sends traces and logs with the OpenTelemetry SDK, through tracing-opentelemetry and the tracing appender, moves to oxtel by deleting most of its setup. The `tracing` calls stay as they are, the standard `OTEL_` variables mean the same, and what arrives at the collector has the same shape.
+
+## What to delete
+
+The dependencies, before and after:
+
+<Example file="examples/migration/opentelemetry.rs" doc="toml" title="Before" />
+
+<Example file="examples/logs.rs" doc="toml" title="After" />
+
+The setup, before and after:
+
+<Example file="examples/migration/opentelemetry.rs" region="setup" title="Before: examples/migration/opentelemetry.rs" />
+
+<Example file="examples/logs.rs" region="setup" title="After: examples/logs.rs" />
+
+The shutdown, before:
+
+<Example file="examples/migration/opentelemetry.rs" region="shutdown" title="Before" />
+
+And after, nothing: the guard `oxtel::init()` returns sends what's pending when it's dropped at the end of `main`, waiting up to 5 seconds.
+
+## The settings that stay the same
+
+The variables the SDK reads mean the same to oxtel: `OTEL_SERVICE_NAME` and `OTEL_RESOURCE_ATTRIBUTES`; the `OTEL_EXPORTER_OTLP_` endpoint, headers, protocol, compression and timeout, for all signals or each; `OTEL_TRACES_SAMPLER` and its argument; and the batching variables, `OTEL_BSP_` and `OTEL_BLRP_`.
+
+oxtel reads some that the SDK leaves to code, so what the setup above did in code comes from the environment instead. `OTEL_PROPAGATORS` picks the propagators, W3C Trace Context and Baggage unless it says otherwise, so there's no global propagator to set. `OTEL_TRACES_EXPORTER` and the others pick the exporters. [Every setting](/reference/settings/) lists them all.
+
+One difference: with no endpoint set, the SDK sends to `http://localhost:4318`, and oxtel sends nothing, until an endpoint is set or an exporter is named.
+
+## Carrying a trace by hand
+
+Code that reads and writes trace context itself, for a transport oxtel's crates don't cover, uses `oxtel::propagation` instead of the global propagator and tracing-opentelemetry's `OpenTelemetrySpanExt`. Before:
+
+<Example file="examples/migration/opentelemetry.rs" region="propagation" title="Before" />
+
+After:
+
+<Example file="examples/propagation.rs" region="propagation" title="After: examples/propagation.rs" />
+
+The receiver's difference: instead of setting a span's parent after making it, keep the guard `extract_parent` returns while making the span, and that span continues the incoming trace. For HTTP, [oxtel-tower and oxtel-reqwest](/guide/libraries/) do both sides by themselves.
+
+## Metrics
+
+oxtel records metrics from the [`metrics`](https://docs.rs/metrics) crate, not from OpenTelemetry's metrics API, so code that uses OpenTelemetry's meters changes where it records:
+
+| OpenTelemetry | metrics |
+|---|---|
+| `meter.u64_counter("jobs.processed").build()`, then `.add(1, &[KeyValue::new("outcome", "ok")])` | `metrics::counter!("jobs.processed", "outcome" => "ok").increment(1)` |
+| `meter.f64_histogram("jobs.duration").with_unit("s").build()`, then `.record(secs, &[])` | `metrics::histogram!("jobs.duration").record(secs)`, with `metrics::describe_histogram!("jobs.duration", Unit::Seconds, "...")` once for its unit |
+| `meter.f64_gauge("queue.depth").build()`, then `.record(n, &[])` | `metrics::gauge!("queue.depth").set(n)` |
+| `meter.i64_up_down_counter("connections").build()`, then `.add(1, &[])` | `metrics::gauge!("connections").increment(1.0)` |
+
+What arrives at the collector is the same: OTLP metrics under the same names and attributes. [A background worker](/scenarios/worker/) records metrics this way.
+
+## What else differs
+
+- **Fewer span attributes.** tracing-opentelemetry records each span's source location, thread, and busy and idle times by default. oxtel records the span's own fields, and its name, kind and status.
+- **Log records too.** oxtel turns each event into a log record as well as a span event, as the tracing appender does, with no bridge to set up.
+
+## How it's checked
+
+CI builds the "before" program with exactly the dependencies shown, and runs the "after" programs, `examples/logs.rs` and `examples/propagation.rs`, comparing what they print with what's expected; the receiver's lines carry the sender's trace id.
