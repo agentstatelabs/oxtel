@@ -116,6 +116,8 @@ export default defineConfig({
 						{ label: 'What works with what', slug: 'reference/integrations' },
 						{ label: 'Every setting', slug: 'reference/settings' },
 						{ label: 'Every span and metric', slug: 'reference/telemetry' },
+						{ label: 'Compared with the official SDK', slug: 'reference/compare' },
+						{ label: 'Conformance', slug: 'reference/conformance' },
 					],
 				},
 				{

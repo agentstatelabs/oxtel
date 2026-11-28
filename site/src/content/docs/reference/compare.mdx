@@ -1,0 +1,57 @@
+---
+title: Compared with the official SDK
+description: oxtel against the OpenTelemetry Rust SDK with tracing-opentelemetry, and against metrics-exporter-prometheus. How each was measured, every number, and where oxtel is slower or does less.
+---
+
+import Markdown from '../../../components/Markdown.astro';
+
+How oxtel compares with the usual way to send telemetry from Rust: the official OpenTelemetry SDK, through tracing-opentelemetry, and metrics-exporter-prometheus for metrics. The numbers and the notes on them are the repository's [benchmark results](https://github.com/agentstatelabs/oxtel/blob/main/bench/RESULTS.md), shown as they stand when the site is built.
+
+## What's compared
+
+<Markdown file="bench/RESULTS.md" section="What's compared" />
+
+## Making it fair
+
+<Markdown file="bench/RESULTS.md" section="Making it fair" />
+
+## Traces
+
+<Markdown file="bench/RESULTS.md" section="Traces: cost per operation on the instrumented thread" />
+
+## Metrics
+
+<Markdown file="bench/RESULTS.md" section="Metrics: cost per measurement" />
+
+## Logs
+
+<Markdown file="bench/RESULTS.md" section="Logs: cost per event on the instrumented thread" />
+
+## End to end
+
+<Markdown file="bench/RESULTS.md" section="End to end: OTLP/HTTP to a receiver" />
+
+## Where oxtel is slower or does less
+
+In the numbers above:
+
+- **A log event outside any span** costs about the same with both, and the official appender is a few percent faster. Inside a span, oxtel is faster.
+- **Memory in a burst.** Both stay bounded, and oxtel's peak is a little higher than the official SDK's.
+- **A histogram recorded from many threads at once.** oxtel's counters spread across threads when they contend; its histograms don't yet, so every thread updates the same atomics.
+- **Exemplars cost something.** A measurement inside a sampled span is slower with exemplars on, which is oxtel's default. The official SDK doesn't record exemplars at all. `OTEL_METRICS_EXEMPLAR_FILTER=always_off` turns them off.
+
+In what it does:
+
+- **No OpenTelemetry API.** oxtel records what `tracing` and `metrics` record. Code instrumented with the `opentelemetry` crate's own API, a library's included, isn't recorded.
+- **No instruments with callbacks.** The `metrics` crate has none, so a value read on demand, such as a queue's length, is set as a gauge when it changes, or by a thread of your own, [as oxtel-tokio does](/guide/libraries/#the-tokio-runtime-oxtel-tokio).
+- **The standard samplers only:** always on, always off, a ratio of traces, and following the parent, chosen with `OTEL_TRACES_SAMPLER`. There's no way to write your own.
+- **Fewer exporters:** OTLP over HTTP and gRPC, OTLP/JSON lines, Prometheus and the console. There's no Zipkin exporter.
+- **Fewer span attributes** than tracing-opentelemetry records by default: no source location, thread, or busy and idle times.
+- **Not yet:** detecting cloud providers, and remote management with OpAMP. [What works with what](/reference/integrations/) has the plans.
+- **Younger.** oxtel is at 0.4, its API will change before 1.0, and it isn't part of the OpenTelemetry project.
+
+## Reproducing
+
+<Markdown file="bench/RESULTS.md" section="Reproducing" />
+
+The benchmarks' code is in the repository's [`bench/`](https://github.com/agentstatelabs/oxtel/tree/main/bench). Absolute numbers depend on the machine; the comparisons are what hold.
