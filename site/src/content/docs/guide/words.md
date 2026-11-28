@@ -12,10 +12,14 @@ You can use oxtel without any of these, but they're the words backends and colle
 | **Span** | A piece of work with a start and an end, such as one request or one database query: `tracing::info_span!("request")`. Events inside it carry its fields. |
 | **Trace** | All the spans of one request, across every service it touched. The **trace id** on each log line ties them together. |
 | **Metric** | A number tracked over time, such as requests served or how long they took: `metrics::counter!("orders.placed").increment(1)`. |
+| **Log record** | An event sent to a collector or backend, as opposed to a log line written to the program's own output. oxtel can do both with each event: [local log lines](/reference/settings/#local-log-lines) are on from the start, and log records go once an endpoint is set. |
+| **Resource**, and resource attributes | What every span, metric and log record says about where it came from: the service's name, the host, the container, the Kubernetes pod. oxtel finds most of it; add more with `OTEL_RESOURCE_ATTRIBUTES`. |
+| **Propagation** | Passing the trace id from one service to the next in a request's headers, so the receiving service's spans continue the caller's trace instead of starting one of their own. oxtel-tower and oxtel-reqwest do it for HTTP. |
+| **Sampling** | Keeping only some traces, to send and store less. By default oxtel keeps every trace its caller kept; `OTEL_TRACES_SAMPLER` changes that. |
 | **Guard** | What `oxtel::init()` returns. Keep it until the end of `main`: dropping it sends whatever is still waiting and shuts telemetry down. |
 | **Service name** | What backends call your program. Set it with `OTEL_SERVICE_NAME`, or in code with `oxtel::builder().with_default_service_name("shop")`. |
 | **Semantic conventions** | OpenTelemetry's agreed names for common things, such as `http.response.status_code` or `http.server.request.duration`, so that backends recognise them. oxtel's layers use them. |
-| **OTLP** | The OpenTelemetry protocol: how traces, metrics and logs travel to a collector or backend. oxtel speaks it over HTTP, usually on port 4318. |
+| **OTLP** | The OpenTelemetry protocol: how traces, metrics and logs travel to a collector or backend. oxtel speaks it over HTTP, usually on port 4318, or over gRPC on 4317 with its `grpc` feature. |
 | **Exporter** | The part that sends one kind of telemetry somewhere: `otlp` to a collector or backend, `console` to standard output, `prometheus` for scraping. The `OTEL_TRACES_EXPORTER`, `OTEL_METRICS_EXPORTER` and `OTEL_LOGS_EXPORTER` settings choose them. |
 | **Collector** | A program, usually the OpenTelemetry Collector, that receives OTLP and passes it on to one or more backends. Optional: you can send straight to a backend. |
 | **Backend** | Where you look at the data: Jaeger, Grafana, Elastic, Honeycomb, Datadog and many more accept OTLP. |

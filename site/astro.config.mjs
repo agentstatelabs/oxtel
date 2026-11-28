@@ -50,6 +50,18 @@ export default defineConfig({
 			],
 			editLink: { baseUrl: 'https://github.com/agentstatelabs/oxtel/edit/main/site/' },
 			customCss: ['./src/styles/custom.css'],
+			// The image link previews show, for every page; scripts/social-card.mjs
+			// renders it.
+			head: [
+				{ tag: 'meta', attrs: { property: 'og:image', content: `${site}/og.png` } },
+				{ tag: 'meta', attrs: { property: 'og:image:width', content: '1200' } },
+				{ tag: 'meta', attrs: { property: 'og:image:height', content: '630' } },
+				{
+					tag: 'meta',
+					attrs: { property: 'og:image:alt', content: 'oxtel: telemetry for Rust, without the ceremony' },
+				},
+				{ tag: 'meta', attrs: { name: 'twitter:image', content: `${site}/og.png` } },
+			],
 			sidebar: [
 				{ label: 'Get started', slug: 'start' },
 				{

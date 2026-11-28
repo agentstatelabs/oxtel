@@ -27,7 +27,7 @@ Set these where your program runs, then start it:
 
 ## Sending it on
 
-To send to a backend, add the backend's exporter to `exporters`, and list it in each pipeline that should use it. Most backends take OTLP, which the `otlphttp` exporter in the comments sends: give it the backend's endpoint and the headers it asks for. The contrib image used here has exporters for most others too.
+To send to a backend, add the backend's exporter to `exporters`, and list it in each pipeline that should use it: the configuration has one pipeline for each kind of telemetry. Most backends take OTLP, which the `otlphttp` exporter in the comments sends: give it the backend's endpoint and the headers it asks for. The contrib image used here has exporters for most others too.
 
 - **Keep credentials in the Collector.** A header written as `${env:BACKEND_TOKEN}` is read from the Collector's environment, so the key isn't in the file, and isn't in any of your programs.
 - **In Kubernetes,** a Collector usually runs on each node or as a service, and programs send to its address, such as `OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318`.

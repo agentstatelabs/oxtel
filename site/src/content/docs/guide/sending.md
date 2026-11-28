@@ -19,7 +19,7 @@ OTLP runs over HTTP or over gRPC. Both carry the same data, and the OpenTelemetr
 
 For gRPC, turn on the feature where you add oxtel, `oxtel = { version = "0.4", features = ["grpc"] }`, and set `OTEL_EXPORTER_OTLP_PROTOCOL=grpc`.
 
-- **The endpoint is used as it is,** such as `http://collector:4317`, with no path added. With nothing set, it's `http://localhost:4317`.
+- **The endpoint is used as it is,** such as `http://collector:4317`, with no path added. With no endpoint set, once an exporter is named, it's `http://localhost:4317`.
 - **It works in any program.** gRPC uses tonic's HTTP/2 client, on a small tokio runtime of its own, so a program doesn't need to be async to use it.
 - **Failures read the same.** A gRPC `UNAUTHENTICATED` is reported as HTTP's status 401 would be, with the hint to check the credentials.
 - **The feature is needed.** Without it, `grpc` falls back to `http/protobuf`, with a warning at startup.
